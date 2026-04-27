@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
+import '../services/location_service.dart'; // New Import
 import 'login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -14,6 +15,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final ApiService _apiService = ApiService();
   final AuthService _authService = AuthService();
+  final LocationTrackingService _locationService = LocationTrackingService(); // New Service
   
   bool _isLoading = false;
   bool _isInitializing = true;
@@ -30,6 +32,12 @@ class _HomeScreenState extends State<HomeScreen> {
     _initializeData();
   }
 
+  @override
+  void dispose() {
+    _locationService.stopTracking(); // Ensure tracking stops if widget is destroyed
+    super.dispose();
+  }
+
   /// Initial data load: Companies and Active Journey
   Future<void> _initializeData() async {
     setState(() => _isInitializing = true);
@@ -37,6 +45,15 @@ class _HomeScreenState extends State<HomeScreen> {
       _loadJourneyStatus(),
       _fetchUserCompanies(),
     ]);
+
+    // Resume tracking if a journey was already active
+    if (_activeJourneyId != null && _selectedCompanyId != null) {
+      _locationService.startTracking(
+        journeyId: _activeJourneyId!,
+        companyId: _selectedCompanyId!,
+      );
+    }
+    
     setState(() => _isInitializing = false);
   }
 
@@ -85,10 +102,27 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool get isTracking => _activeJourneyId != null;
 
+  /// Starts a new journey with GPS tracking enabled
   Future<void> _startJourney() async {
     if (_selectedCompanyId == null) return;
+
+    // 1. Check Permissions First
+    final bool hasPermission = await _locationService.handlePermissions();
+    if (!hasPermission) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Location permission is required to track journeys.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      return;
+    }
+
     setState(() => _isLoading = true);
     try {
+      // 2. Call Start API
       final response = await _apiService.post('/location/start', {
         'company_id': _selectedCompanyId,
         'start_lat': 0.0,
@@ -98,39 +132,92 @@ class _HomeScreenState extends State<HomeScreen> {
       if (response.success && response.data != null) {
         final dynamic journeyData = response.data['data'];
         final String journeyId = journeyData['id'].toString();
+        
         final prefs = await SharedPreferences.getInstance();
         final now = DateTime.now();
         final startTimeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+        
         await prefs.setString('active_journey_id', journeyId);
         await prefs.setString('journey_start_time', startTimeStr);
+        
+        // 3. Start Real-time GPS Tracking Engine
+        _locationService.startTracking(
+          journeyId: journeyId,
+          companyId: _selectedCompanyId!,
+        );
+
         setState(() {
           _activeJourneyId = journeyId;
           _startTime = startTimeStr;
         });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Journey started with GPS tracking'), backgroundColor: Colors.green),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(response.message), backgroundColor: Colors.red),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to start journey'), backgroundColor: Colors.red),
+        );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
+  /// Ends the journey and stops tracking
   Future<void> _endJourney() async {
     if (_activeJourneyId == null || _selectedCompanyId == null) return;
+
     setState(() => _isLoading = true);
     try {
+      // 1. Stop GPS Tracking Engine First
+      _locationService.stopTracking();
+
+      // 2. Call End API
       final response = await _apiService.post('/location/end', {
         'journey_id': _activeJourneyId,
         'company_id': _selectedCompanyId,
         'end_lat': 0.0,
         'end_lng': 0.0,
       });
+
       if (response.success) {
         final prefs = await SharedPreferences.getInstance();
         await prefs.remove('active_journey_id');
         await prefs.remove('journey_start_time');
+        
         setState(() {
           _activeJourneyId = null;
           _startTime = null;
         });
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Journey and tracking stopped'), backgroundColor: Colors.blue),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(response.message), backgroundColor: Colors.red),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to end journey'), backgroundColor: Colors.red),
+        );
       }
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -138,6 +225,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _handleLogout() async {
+    _locationService.stopTracking(); // Stop tracking on logout
     await _authService.logout();
     if (mounted) {
       Navigator.of(context).pushAndRemoveUntil(
@@ -180,18 +268,15 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                // Smart Company Selector: Only shown if > 1 company
                 if (_companies.length > 1) ...[
                   _buildCompanySelector(),
                   SizedBox(height: size.height * 0.05),
                 ],
                 
-                // Centered Visualizer with relative sizing
                 _buildStatusVisualizer(size),
                 
                 SizedBox(height: size.height * 0.05),
                 
-                // Status Text
                 Text(
                   isTracking ? 'Tracking in Progress' : 'Not Tracking',
                   style: TextStyle(
@@ -206,16 +291,14 @@ class _HomeScreenState extends State<HomeScreen> {
                 
                 if (isTracking && _startTime != null) _buildStartTimeBadge(),
                 
-                // Spacing based on screen height
                 SizedBox(height: size.height * 0.1),
                 
-                // Adaptive Action Button
                 _buildMainActionButton(),
                 
                 const SizedBox(height: 20),
                 const Text(
-                  'Dummy coordinates (0.0, 0.0) will be used.',
-                  style: TextStyle(color: Colors.blueGrey, fontSize: 12),
+                  'GPS tracking active during journey.',
+                  style: TextStyle(color: Colors.blueGrey, fontSize: 12, fontStyle: FontStyle.italic),
                 ),
               ],
             ),
@@ -261,7 +344,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildStatusVisualizer(Size size) {
-    // Relative sizing for the circle
     final double diameter = size.width * (size.width > 600 ? 0.25 : 0.45);
     
     return Container(
