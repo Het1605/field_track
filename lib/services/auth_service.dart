@@ -26,6 +26,13 @@ class AuthService {
     return response;
   }
 
+  /// Sends a password reset link to the user's email
+  Future<ApiResponse> forgotPassword(String email) async {
+    return await _apiService.post('/auth/reset-password', {
+      'email': email,
+    });
+  }
+
   /// Saves the JWT token securely in shared_preferences
   Future<void> _saveToken(String token) async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
