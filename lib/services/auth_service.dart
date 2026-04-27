@@ -7,8 +7,11 @@ class AuthService {
 
   /// Calls the login API and stores the token if successful
   Future<ApiResponse> login(String email, String password) async {
-    final response = await _apiService.post('/auth/login', {
-      'email': email,
+    // FastAPI OAuth2PasswordRequestForm expects:
+    // 1. Content-Type: application/x-www-form-urlencoded
+    // 2. Body keys: "username" and "password"
+    final response = await _apiService.postForm('/auth/login', {
+      'username': email,
       'password': password,
     });
 

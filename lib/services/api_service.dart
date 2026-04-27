@@ -89,41 +89,47 @@ class ApiService {
       );
     }
 
+    // Extract error message from backend if available
+    String? backendMessage;
+    if (body is Map && body.containsKey('detail')) {
+      backendMessage = body['detail'].toString();
+    } else if (body is Map && body.containsKey('message')) {
+      backendMessage = body['message'].toString();
+    }
+
     // Handle Specific Error Status Codes
     switch (response.statusCode) {
       case 401:
         return ApiResponse(
           success: false,
-          message: 'Unauthorized: Session expired or invalid token.',
+          message: backendMessage ?? 'Unauthorized: Session expired or invalid token.',
         );
       case 403:
         return ApiResponse(
           success: false,
-          message: 'Forbidden: You do not have permission to access this resource.',
+          message: backendMessage ?? 'Forbidden: You do not have permission to access this resource.',
         );
       case 404:
         return ApiResponse(
           success: false,
-          message: 'Resource not found.',
+          message: backendMessage ?? 'Resource not found.',
+        );
+      case 422:
+        return ApiResponse(
+          success: false,
+          message: backendMessage ?? 'Validation Error: Please check your input.',
+          data: body,
         );
       case 500:
         return ApiResponse(
           success: false,
-          message: 'Internal Server Error. Please try again later.',
+          message: backendMessage ?? 'Internal Server Error. Please try again later.',
         );
       default:
-        // Try to extract error message from backend if available
-        String errorMsg = 'Error ${response.statusCode}';
-        if (body is Map && body.containsKey('detail')) {
-          errorMsg = body['detail'].toString();
-        } else if (body is Map && body.containsKey('message')) {
-          errorMsg = body['message'].toString();
-        }
-        
         return ApiResponse(
           success: false,
           data: body,
-          message: errorMsg,
+          message: backendMessage ?? 'Unexpected error occurred: ${response.statusCode}',
         );
     }
   }
@@ -144,6 +150,19 @@ class ApiService {
       Uri.parse('$_baseUrl$endpoint'),
       headers: headers,
       body: json.encode(body),
+    ));
+  }
+
+  /// POST Form-UrlEncoded Request (Used for OAuth2/FastAPI Login)
+  Future<ApiResponse> postForm(String endpoint, Map<String, String> body) async {
+    final headers = await _getHeaders();
+    // Override Content-Type for form-urlencoded
+    headers['Content-Type'] = 'application/x-www-form-urlencoded';
+    
+    return _sendRequest(() => http.post(
+      Uri.parse('$_baseUrl$endpoint'),
+      headers: headers,
+      body: body, // The http package automatically handles form encoding for Maps
     ));
   }
 
