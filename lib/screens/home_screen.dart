@@ -234,7 +234,72 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _handleLogout() async {
-    _locationService.stopTracking(); // Stop tracking on logout
+    if (isTracking) {
+      _showActiveJourneyLogoutDialog();
+    } else {
+      _performLogout();
+    }
+  }
+
+  /// Shows a professional dialog warning the user about an active journey
+  void _showActiveJourneyLogoutDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.warning_amber_rounded, color: Colors.orange),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Active Journey Running',
+                softWrap: true,
+              ),
+            ),
+          ],
+        ),
+        content: const SingleChildScrollView(
+          child: Text(
+            'You must end your journey before logging out to ensure your records are saved correctly.',
+            softWrap: true,
+          ),
+        ),
+        actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+        actionsAlignment: MainAxisAlignment.end,
+        actionsOverflowButtonSpacing: 8,
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context); // Close dialog
+              await _endJourney(); // End journey first
+              _performLogout(); // Then logout
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red.shade600,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            ),
+            child: const Text(
+              'End Journey & Logout',
+              textAlign: TextAlign.center,
+              softWrap: true,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Core logout logic shared between direct and intercepted logout
+  void _performLogout() async {
+    _locationService.stopTracking(); // Stop tracking immediately
     
     // Clear journey session data
     final prefs = await SharedPreferences.getInstance();
