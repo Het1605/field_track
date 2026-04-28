@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/auth_service.dart';
 import 'home_screen.dart';
 import 'forgot_password_screen.dart';
@@ -42,6 +43,11 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       if (response.success) {
+        // Hard clear any stale journey data before entering the app
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('active_journey_id');
+        await prefs.remove('journey_start_time');
+
         if (mounted) {
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (_) => const HomeScreen()),

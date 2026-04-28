@@ -40,6 +40,8 @@ dependencies:
   permission_handler: ^12.0.1
   sqflite: ^2.4.2
   path: ^1.9.1
+  flutter_background_service: ^5.1.0
+  flutter_background_service_android: ^6.3.1
 
 dev_dependencies:
   flutter_test:

@@ -1,8 +1,13 @@
 import 'package:flutter/material.dart';
+import 'services/background_service.dart';
 import 'screens/login_screen.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Background Service (Phase 1)
+  await BackgroundServiceManager.initializeService();
+  
   runApp(const FieldTrackApp());
 }
 

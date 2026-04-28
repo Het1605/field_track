@@ -14,8 +14,9 @@ class LocationTrackingService {
   // Tracking interval (3 minutes)
   static const Duration _interval = Duration(minutes: 3);
 
-  /// Handles location permission requests (Foreground only)
+  /// Handles location permission requests (Foreground and Notifications)
   Future<bool> handlePermissions() async {
+    // 1. Request Foreground Location
     PermissionStatus status = await Permission.location.status;
     if (status.isDenied) {
       status = await Permission.location.request();
@@ -23,6 +24,11 @@ class LocationTrackingService {
     
     if (status.isPermanentlyDenied || status.isDenied) {
       return false;
+    }
+
+    // 2. Request Notification Permission (Required for Background Service tray icon)
+    if (await Permission.notification.isDenied) {
+      await Permission.notification.request();
     }
 
     return status.isGranted;
@@ -46,10 +52,10 @@ class LocationTrackingService {
     debugPrint('GPS Tracking + Offline Engine started.');
     
     // Initial fetch and attempt sync
-    _trackAndSave(journeyId, companyId);
+    trackAndSave(journeyId, companyId);
     
     _trackingTimer = Timer.periodic(_interval, (_) {
-      _trackAndSave(journeyId, companyId);
+      trackAndSave(journeyId, companyId);
     });
   }
 
@@ -60,8 +66,8 @@ class LocationTrackingService {
     debugPrint('GPS Tracking stopped.');
   }
 
-  /// Fetches GPS, saves locally, and attempts batch sync
-  Future<void> _trackAndSave(String journeyId, int companyId) async {
+  /// Fetches GPS, saves locally, and attempts batch sync (Public for Background Service)
+  Future<void> trackAndSave(String journeyId, int companyId) async {
     try {
       // 1. Fetch current GPS position
       Position position = await Geolocator.getCurrentPosition(
