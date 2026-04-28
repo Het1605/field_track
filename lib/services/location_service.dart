@@ -14,16 +14,18 @@ class LocationTrackingService {
   // Tracking interval (3 minutes)
   static const Duration _interval = Duration(minutes: 3);
 
-  /// Handles location permission requests
+  /// Handles location permission requests (Foreground only)
   Future<bool> handlePermissions() async {
     PermissionStatus status = await Permission.location.status;
     if (status.isDenied) {
       status = await Permission.location.request();
     }
-    if (status.isPermanentlyDenied) {
+    
+    if (status.isPermanentlyDenied || status.isDenied) {
       await openAppSettings();
       return false;
     }
+
     return status.isGranted;
   }
 

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
-import '../services/location_service.dart'; // New Import
+import '../services/location_service.dart';
 import 'login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -15,7 +15,7 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final ApiService _apiService = ApiService();
   final AuthService _authService = AuthService();
-  final LocationTrackingService _locationService = LocationTrackingService(); // New Service
+  final LocationTrackingService _locationService = LocationTrackingService();
   
   bool _isLoading = false;
   bool _isInitializing = true;
@@ -102,7 +102,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool get isTracking => _activeJourneyId != null;
 
-  /// Starts a new journey with GPS tracking enabled
+  /// Starts a new journey and launches the Background Foreground Service
   Future<void> _startJourney() async {
     if (_selectedCompanyId == null) return;
 
@@ -139,6 +139,7 @@ class _HomeScreenState extends State<HomeScreen> {
         
         await prefs.setString('active_journey_id', journeyId);
         await prefs.setString('journey_start_time', startTimeStr);
+        await prefs.setInt('selected_company_id', _selectedCompanyId!);
         
         // 3. Start Real-time GPS Tracking Engine
         _locationService.startTracking(
@@ -174,7 +175,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  /// Ends the journey and stops tracking
+  /// Ends the journey and stops the background service
   Future<void> _endJourney() async {
     if (_activeJourneyId == null || _selectedCompanyId == null) return;
 
