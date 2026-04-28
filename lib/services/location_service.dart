@@ -43,27 +43,23 @@ class LocationTrackingService {
     );
   }
 
-  /// Starts the tracking engine
+  /// Starts the tracking engine (Initial manual trigger)
   void startTracking({
     required String journeyId,
     required int companyId,
   }) {
-    stopTracking();
-    debugPrint('GPS Tracking + Offline Engine started.');
+    debugPrint('GPS Tracking Engine initialized.');
     
-    // Initial fetch and attempt sync
+    // Perform one immediate manual track to ensure the journey starts with a point
     trackAndSave(journeyId, companyId);
     
-    _trackingTimer = Timer.periodic(_interval, (_) {
-      trackAndSave(journeyId, companyId);
-    });
+    // NOTE: We no longer start a Timer here because the BackgroundService 
+    // now handles the periodic 3-minute tracking logic exclusively.
   }
 
   /// Stops the tracking engine
   void stopTracking() {
-    _trackingTimer?.cancel();
-    _trackingTimer = null;
-    debugPrint('GPS Tracking stopped.');
+    debugPrint('GPS Tracking Engine stopped.');
   }
 
   /// Fetches GPS, saves locally, and attempts batch sync (Public for Background Service)
