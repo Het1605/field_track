@@ -22,11 +22,19 @@ class LocationTrackingService {
     }
     
     if (status.isPermanentlyDenied || status.isDenied) {
-      await openAppSettings();
       return false;
     }
 
     return status.isGranted;
+  }
+
+  /// Fetches the current GPS position
+  Future<Position> getCurrentLocation() async {
+    return await Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+      ),
+    );
   }
 
   /// Starts the tracking engine

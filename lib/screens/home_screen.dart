@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:geolocator/geolocator.dart'; // Added for Position type
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/location_service.dart';
 import 'login_screen.dart';
+import 'change_password_screen.dart'; // New Import
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -122,11 +124,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() => _isLoading = true);
     try {
-      // 2. Call Start API
+      // 2. Fetch current location for Start API
+      final Position position = await _locationService.getCurrentLocation();
+
+      // 3. Call Start API
       final response = await _apiService.post('/location/start', {
         'company_id': _selectedCompanyId,
-        'start_lat': 0.0,
-        'start_lng': 0.0,
+        'start_lat': position.latitude,
+        'start_lng': position.longitude,
       });
 
       if (response.success && response.data != null) {
@@ -181,15 +186,18 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() => _isLoading = true);
     try {
-      // 1. Stop GPS Tracking Engine First
+      // 1. Fetch current location for End API
+      final Position position = await _locationService.getCurrentLocation();
+
+      // 2. Stop GPS Tracking Engine First
       _locationService.stopTracking();
 
-      // 2. Call End API
+      // 3. Call End API
       final response = await _apiService.post('/location/end', {
         'journey_id': _activeJourneyId,
         'company_id': _selectedCompanyId,
-        'end_lat': 0.0,
-        'end_lng': 0.0,
+        'end_lat': position.latitude,
+        'end_lng': position.longitude,
       });
 
       if (response.success) {
@@ -227,7 +235,15 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _handleLogout() async {
     _locationService.stopTracking(); // Stop tracking on logout
+    
+    // Clear journey session data
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('active_journey_id');
+    await prefs.remove('journey_start_time');
+    
+    // Clear Auth token via service
     await _authService.logout();
+    
     if (mounted) {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LoginScreen()),
@@ -251,10 +267,49 @@ class _HomeScreenState extends State<HomeScreen> {
         title: const Text('Journey Control', style: TextStyle(fontWeight: FontWeight.bold)),
         centerTitle: true,
         actions: [
-          IconButton(
-            icon: const Icon(Icons.logout_rounded),
-            onPressed: _handleLogout,
-            tooltip: 'Logout',
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'profile') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ChangePasswordScreen()),
+                );
+              } else if (value == 'logout') {
+                _handleLogout();
+              }
+            },
+            offset: const Offset(0, 50),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'profile',
+                child: Row(
+                  children: [
+                    Icon(Icons.lock_reset_rounded, color: Colors.blueGrey),
+                    SizedBox(width: 12),
+                    Text('Change Password'),
+                  ],
+                ),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(
+                value: 'logout',
+                child: Row(
+                  children: [
+                    Icon(Icons.logout_rounded, color: Colors.redAccent),
+                    SizedBox(width: 12),
+                    Text('Logout', style: TextStyle(color: Colors.redAccent)),
+                  ],
+                ),
+              ),
+            ],
+            child: const Padding(
+              padding: EdgeInsets.only(right: 16.0),
+              child: CircleAvatar(
+                radius: 18,
+                backgroundColor: Color(0xFFE2E8F0),
+                child: Icon(Icons.person_outline_rounded, color: Color(0xFF475569), size: 20),
+              ),
+            ),
           ),
         ],
       ),
