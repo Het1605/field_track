@@ -74,4 +74,15 @@ class DatabaseService {
       whereArgs: [journeyId],
     );
   }
+
+  /// Deletes records that have missing or invalid journey IDs
+  Future<void> deleteCorruptedRecords() async {
+    final db = await database;
+    // Remove records where journey_id is NULL or the string 'null'
+    await db.delete(
+      'locations',
+      where: 'journey_id IS NULL OR journey_id = ?',
+      whereArgs: ['null'],
+    );
+  }
 }

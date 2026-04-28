@@ -98,6 +98,9 @@ class LocationTrackingService {
   /// Fetches all unsent locations and sends them in a single batch to the backend
   Future<void> sendStoredLocations(int companyId) async {
     try {
+      // 0. Clean up any records with invalid IDs first
+      await _dbService.deleteCorruptedRecords();
+
       // 1. Fetch all unsent locations from SQLite
       final List<Map<String, dynamic>> storedPoints = await _dbService.getAllStoredLocations();
       if (storedPoints.isEmpty) {
@@ -108,7 +111,10 @@ class LocationTrackingService {
       // 2. Group points by journey_id (in case of multiple abandoned journeys)
       final Map<String, List<Map<String, dynamic>>> groupedByJourney = {};
       for (var point in storedPoints) {
-        final jId = point['journey_id'].toString();
+        final rawId = point['journey_id'];
+        if (rawId == null || rawId == 'null') continue; // Skip corrupted/invalid records
+        
+        final jId = rawId.toString();
         groupedByJourney.putIfAbsent(jId, () => []).add(point);
       }
 
