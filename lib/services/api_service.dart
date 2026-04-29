@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 /// Standardized Response Object for all API calls
 class ApiResponse {
@@ -22,10 +23,8 @@ class ApiResponse {
 
 /// Centralized API Service Layer for Field Track
 class ApiService {
-  // Base URL Configuration
-  // Android Emulator: http://10.0.2.2:8000/api
-  // iOS Emulator/Real Device: http://<your-local-ip>:8000/api
-  static const String _baseUrl = 'http://10.0.2.2:8000/api';
+  // Base URL Configuration (Strictly loaded from .env)
+  final String _baseUrl = dotenv.env['BASE_URL']!;
   
   // Timeout duration
   static const Duration _timeout = Duration(seconds: 15);

@@ -1,13 +1,18 @@
 import 'package:flutter/material.dart';
-import 'services/background_service.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 import 'screens/login_screen.dart';
+import 'services/background_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
+  // Load Environment Variables (.env)
+  await dotenv.load(fileName: ".env");
+
   // Initialize Background Service (Phase 1)
   await BackgroundServiceManager.initializeService();
-  
+
   runApp(const FieldTrackApp());
 }
 
