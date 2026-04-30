@@ -51,20 +51,11 @@ class _HomeScreenState extends State<HomeScreen> {
       _isSessionValid = true;
     });
 
-    await Future.wait([_loadJourneyStatus(), _fetchUserCompanies()]);
+    // 1. Fetch companies
+    await _fetchUserCompanies();
 
-    // Resume tracking if a journey was already active
-    if (_activeJourneyId != null && _selectedCompanyId != null) {
-      _locationService.startTracking(
-        journeyId: _activeJourneyId!,
-        companyId: _selectedCompanyId!,
-      );
-
-      final service = FlutterBackgroundService();
-      if (!(await service.isRunning())) {
-        await service.startService();
-      }
-    }
+    // 2. Check for active journey (Local + Backend Sync)
+    await _syncActiveJourney();
 
     setState(() => _isInitializing = false);
   }
@@ -100,44 +91,133 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _loadJourneyStatus() async {
-    final prefs = await SharedPreferences.getInstance();
-    final journeyId = prefs.getString('active_journey_id');
+  /// Syncs the active journey state from backend and local storage
+  Future<void> _syncActiveJourney() async {
+    try {
+      final response = await _apiService.get('/location/active-journey');
+      final prefs = await SharedPreferences.getInstance();
 
-    if (journeyId != null) {
-      try {
-        final response = await _apiService.get(
-          '/location/status?journey_id=$journeyId',
-        );
-        if (response.success && response.data != null) {
-          final bool isActive = response.data['is_active'] ?? false;
-          if (isActive) {
-            setState(() {
-              _activeJourneyId = journeyId;
-              _startTime = prefs.getString('journey_start_time');
-            });
-          } else {
-            await prefs.remove('active_journey_id');
-            await prefs.remove('journey_start_time');
-            setState(() {
-              _activeJourneyId = null;
-              _startTime = null;
-            });
-          }
-        } else if (response.message.contains('Session expired')) {
-          // If session is expired, we keep the LOCAL activeJourneyId but mark session invalid
-          setState(() {
-            _activeJourneyId = journeyId;
-            _startTime = prefs.getString('journey_start_time');
-            _isSessionValid = false;
-          });
+      debugPrint("[Sync] Backend Response Data: ${response.data}");
+
+      if (response.success && response.data != null && response.data['data'] != null) {
+        // Backend says there is an active journey
+        final dynamic journeyData = response.data['data'];
+        final String journeyId = journeyData['id'].toString();
+        final int? companyId = journeyData['company_id'];
+        final String? startTime = journeyData['start_time'];
+
+        debugPrint("[Sync] Active Journey Found: $journeyId for Company: $companyId");
+
+        if (companyId == null) {
+           debugPrint("[Sync] Error: company_id is null");
+           return;
         }
-      } catch (e) {
+
+        // Format start time for UI
+        String formattedStart = "Unknown";
+        if (startTime != null) {
+          try {
+            final dt = DateTime.parse(startTime).toLocal();
+            formattedStart = "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+          } catch (_) {}
+        }
+
+        // Sync local storage
+        await prefs.setString('active_journey_id', journeyId);
+        await prefs.setInt('selected_company_id', companyId);
+        
         setState(() {
           _activeJourneyId = journeyId;
-          _startTime = prefs.getString('journey_start_time');
+          _selectedCompanyId = companyId;
+          _startTime = formattedStart;
+        });
+
+        // If background service is NOT running, it means app was killed/restarted
+        final service = FlutterBackgroundService();
+        if (!(await service.isRunning())) {
+          _showResumeJourneyDialog();
+        }
+      } else {
+        // No active journey on backend -> Clear local state
+        await prefs.remove('active_journey_id');
+        await prefs.remove('journey_start_time');
+        setState(() {
+          _activeJourneyId = null;
+          _startTime = null;
         });
       }
+    } catch (e) {
+      debugPrint("Error syncing active journey: $e");
+    }
+  }
+
+  /// Shows a dialog to the user when a journey is found on app start
+  void _showResumeJourneyDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.history_rounded, color: Colors.blue),
+            SizedBox(width: 12),
+            Text('Active Journey Found'),
+          ],
+        ),
+        content: Text(
+          'A journey started at $_startTime was found in progress. Would you like to resume tracking or end it now?',
+          softWrap: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await _endJourney();
+            },
+            child: const Text('End Journey', style: TextStyle(color: Colors.red)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              _resumeTracking();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green.shade600,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: const Text('Resume Journey'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Resumes the tracking logic
+  Future<void> _resumeTracking() async {
+    if (_activeJourneyId == null || _selectedCompanyId == null) return;
+
+    // Restart GPS Engine
+    _locationService.startTracking(
+      journeyId: _activeJourneyId!,
+      companyId: _selectedCompanyId!,
+    );
+
+    // Restart Background Service
+    try {
+      await FlutterBackgroundService().startService();
+    } catch (e) {
+      debugPrint("Service start failed: $e");
+    }
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Tracking resumed successfully'),
+          backgroundColor: Colors.green,
+        ),
+      );
     }
   }
 
@@ -257,8 +337,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() => _isLoading = true);
     try {
-      // 1. Fetch current location for End API
-      final Position position = await _locationService.getCurrentLocation();
+      // 1. Fetch current location for End API (With safety fallback)
+      double lat = 0.0;
+      double lng = 0.0;
+      try {
+        final Position position = await _locationService.getCurrentLocation();
+        lat = position.latitude;
+        lng = position.longitude;
+      } catch (e) {
+        debugPrint("Could not get final location for end journey: $e");
+        // We continue with 0.0 so the user isn't stuck forever
+      }
 
       // 2. Stop GPS Tracking Engine and Background Service (Phase 1)
       _locationService.stopTracking();
@@ -268,8 +357,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final response = await _apiService.post('/location/end', {
         'journey_id': _activeJourneyId,
         'company_id': _selectedCompanyId,
-        'end_lat': position.latitude,
-        'end_lng': position.longitude,
+        'end_lat': lat,
+        'end_lng': lng,
       });
 
       if (response.success) {
@@ -303,8 +392,8 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to end journey'),
+          SnackBar(
+            content: Text('Failed to end journey: $e'),
             backgroundColor: Colors.red,
           ),
         );

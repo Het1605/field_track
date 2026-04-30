@@ -35,7 +35,7 @@ void onStart(ServiceInstance service) async {
   });
 
   // Phase 4 & 5: GPS Tracking + DB Save + API Sync
-  Timer.periodic(const Duration(seconds: 20), (timer) async {
+  Timer.periodic(const Duration(minutes: 3), (timer) async {
     if (trackingService == null) {
       debugPrint('[BackgroundService] Skipping tick: trackingService not initialized.');
       return;
