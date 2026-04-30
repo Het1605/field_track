@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../services/location_service.dart';
 
 /// Top-level function for IOS Background execution (Must be top-level for AOT)
@@ -18,14 +19,27 @@ void onStart(ServiceInstance service) async {
   WidgetsFlutterBinding.ensureInitialized();
   DartPluginRegistrant.ensureInitialized();
 
-  final LocationTrackingService trackingService = LocationTrackingService();
+  LocationTrackingService? trackingService;
+
+  try {
+    // CRITICAL: Load environment variables for this specific isolate
+    await dotenv.load();
+    trackingService = LocationTrackingService();
+    debugPrint('[BackgroundService] Successfully initialized Tracking Service.');
+  } catch (e) {
+    debugPrint('[BackgroundService] CRITICAL INITIALIZATION ERROR: $e');
+  }
 
   service.on('stopService').listen((event) {
     service.stopSelf();
   });
 
   // Phase 4 & 5: GPS Tracking + DB Save + API Sync
-  Timer.periodic(const Duration(minutes: 3), (timer) async {
+  Timer.periodic(const Duration(seconds: 20), (timer) async {
+    if (trackingService == null) {
+      debugPrint('[BackgroundService] Skipping tick: trackingService not initialized.');
+      return;
+    }
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();

@@ -12,7 +12,7 @@ class LocationTrackingService {
   Timer? _trackingTimer;
   
   // Tracking interval (3 minutes)
-  static const Duration _interval = Duration(minutes: 3);
+  static const Duration _interval = Duration(seconds: 20);
 
   /// Handles location permission requests (Foreground and Notifications)
   Future<bool> handlePermissions() async {

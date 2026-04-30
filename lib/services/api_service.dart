@@ -24,7 +24,7 @@ class ApiResponse {
 /// Centralized API Service Layer for Field Track
 class ApiService {
   // Base URL Configuration (Strictly loaded from .env)
-  final String _baseUrl = dotenv.env['BASE_URL']!;
+  final String _baseUrl = dotenv.env['BASE_URL'] ?? "";
   
   // Timeout duration
   static const Duration _timeout = Duration(seconds: 15);
