@@ -24,6 +24,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   bool _isLoading = false;
   bool _isInitializing = true;
+  bool _isSessionValid = true;
   String? _activeJourneyId;
   String? _startTime;
 
@@ -39,14 +40,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
-    _locationService
-        .stopTracking(); // Ensure tracking stops if widget is destroyed
+    _locationService.stopTracking();
     super.dispose();
   }
 
   /// Initial data load: Companies and Active Journey
   Future<void> _initializeData() async {
-    setState(() => _isInitializing = true);
+    setState(() {
+      _isInitializing = true;
+      _isSessionValid = true;
+    });
+
     await Future.wait([_loadJourneyStatus(), _fetchUserCompanies()]);
 
     // Resume tracking if a journey was already active
@@ -56,7 +60,6 @@ class _HomeScreenState extends State<HomeScreen> {
         companyId: _selectedCompanyId!,
       );
 
-      // Ensure background service is running (Phase 1)
       final service = FlutterBackgroundService();
       if (!(await service.isRunning())) {
         await service.startService();
@@ -75,6 +78,8 @@ class _HomeScreenState extends State<HomeScreen> {
           _companies = response.data;
           _restoreOrAutoSelectCompany();
         });
+      } else if (response.message.contains('Session expired')) {
+        setState(() => _isSessionValid = false);
       }
     } catch (e) {
       debugPrint("Error fetching companies: $e");
@@ -98,11 +103,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _loadJourneyStatus() async {
     final prefs = await SharedPreferences.getInstance();
     final journeyId = prefs.getString('active_journey_id');
-    
+
     if (journeyId != null) {
-      // Verify with backend if this journey is actually active
       try {
-        final response = await _apiService.get('/location/status?journey_id=$journeyId');
+        final response = await _apiService.get(
+          '/location/status?journey_id=$journeyId',
+        );
         if (response.success && response.data != null) {
           final bool isActive = response.data['is_active'] ?? false;
           if (isActive) {
@@ -111,7 +117,6 @@ class _HomeScreenState extends State<HomeScreen> {
               _startTime = prefs.getString('journey_start_time');
             });
           } else {
-            // Server says it's NOT active, clear local stale data
             await prefs.remove('active_journey_id');
             await prefs.remove('journey_start_time');
             setState(() {
@@ -119,9 +124,15 @@ class _HomeScreenState extends State<HomeScreen> {
               _startTime = null;
             });
           }
+        } else if (response.message.contains('Session expired')) {
+          // If session is expired, we keep the LOCAL activeJourneyId but mark session invalid
+          setState(() {
+            _activeJourneyId = journeyId;
+            _startTime = prefs.getString('journey_start_time');
+            _isSessionValid = false;
+          });
         }
       } catch (e) {
-        // If API fails, we keep local state but don't force it
         setState(() {
           _activeJourneyId = journeyId;
           _startTime = prefs.getString('journey_start_time');
@@ -196,7 +207,7 @@ class _HomeScreenState extends State<HomeScreen> {
         // 5. Start Background Foreground Service (Phase 1)
         // Increased delay to ensure the OS stabilizes after permission popups
         await Future.delayed(const Duration(milliseconds: 800));
-        
+
         try {
           await FlutterBackgroundService().startService();
         } catch (e) {
@@ -473,58 +484,66 @@ class _HomeScreenState extends State<HomeScreen> {
         ],
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: isLargeScreen ? size.width * 0.2 : 24.0,
-              vertical: size.height * 0.05,
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                if (_companies.length > 1) ...[
-                  _buildCompanySelector(),
-                  SizedBox(height: size.height * 0.05),
-                ],
+        child: Column(
+          children: [
+            if (!_isSessionValid) _buildSessionWarningBanner(),
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isLargeScreen ? size.width * 0.2 : 24.0,
+                    vertical: size.height * 0.05,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      if (_companies.length > 1) ...[
+                        _buildCompanySelector(),
+                        SizedBox(height: size.height * 0.05),
+                      ],
 
-                _buildStatusVisualizer(size),
+                      _buildStatusVisualizer(size),
 
-                SizedBox(height: size.height * 0.05),
+                      SizedBox(height: size.height * 0.05),
 
-                Text(
-                  isTracking ? 'Tracking in Progress' : 'Not Tracking',
-                  style: TextStyle(
-                    fontSize: isLargeScreen ? 32 : 26,
-                    fontWeight: FontWeight.w800,
-                    color:
-                        isTracking
-                            ? Colors.green.shade700
-                            : Colors.blueGrey.shade700,
-                    letterSpacing: -0.5,
+                      Text(
+                        isTracking ? 'Tracking in Progress' : 'Not Tracking',
+                        style: TextStyle(
+                          fontSize: isLargeScreen ? 32 : 26,
+                          fontWeight: FontWeight.w800,
+                          color:
+                              isTracking
+                                  ? Colors.green.shade700
+                                  : Colors.blueGrey.shade700,
+                          letterSpacing: -0.5,
+                        ),
+                      ),
+
+                      const SizedBox(height: 12),
+
+                      if (isTracking && _startTime != null)
+                        _buildStartTimeBadge(),
+
+                      SizedBox(height: size.height * 0.1),
+
+                      _buildMainActionButton(),
+
+                      const SizedBox(height: 20),
+                      const Text(
+                        'GPS tracking active during journey.',
+                        style: TextStyle(
+                          color: Colors.blueGrey,
+                          fontSize: 12,
+                          fontStyle: FontStyle.italic,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-
-                const SizedBox(height: 12),
-
-                if (isTracking && _startTime != null) _buildStartTimeBadge(),
-
-                SizedBox(height: size.height * 0.1),
-
-                _buildMainActionButton(),
-
-                const SizedBox(height: 20),
-                const Text(
-                  'GPS tracking active during journey.',
-                  style: TextStyle(
-                    color: Colors.blueGrey,
-                    fontSize: 12,
-                    fontStyle: FontStyle.italic,
-                  ),
-                ),
-              ],
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -647,6 +666,38 @@ class _HomeScreenState extends State<HomeScreen> {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+      ),
+    );
+  }
+
+  Widget _buildSessionWarningBanner() {
+    return Container(
+      width: double.infinity,
+      color: Colors.orange.shade100,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Row(
+        children: [
+          const Icon(Icons.warning_amber_rounded, color: Colors.orange),
+          const SizedBox(width: 12),
+          const Expanded(
+            child: Text(
+              'Session expired. Please login to sync data.',
+              style: TextStyle(
+                color: Colors.orange,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const LoginScreen()));
+            },
+            child: const Text('Login'),
+          ),
+        ],
       ),
     );
   }

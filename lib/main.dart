@@ -1,23 +1,35 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'services/background_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Load Environment Variables (.env)
+  // 1. Load Environment Variables (.env)
   await dotenv.load(fileName: ".env");
 
-  // Initialize Background Service (Phase 1)
+  // 2. Initialize Background Service
   await BackgroundServiceManager.initializeService();
 
-  runApp(const FieldTrackApp());
+  // 3. Determine Initial Route (Auto-Login)
+  final prefs = await SharedPreferences.getInstance();
+  final String? token = prefs.getString('auth_token');
+  final bool hasActiveJourney = prefs.getString('active_journey_id') != null;
+
+  runApp(FieldTrackApp(
+    initialHome: (token != null || hasActiveJourney)
+        ? const HomeScreen()
+        : const LoginScreen(),
+  ));
 }
 
 class FieldTrackApp extends StatelessWidget {
-  const FieldTrackApp({super.key});
+  final Widget initialHome;
+  const FieldTrackApp({super.key, required this.initialHome});
 
   @override
   Widget build(BuildContext context) {
@@ -33,8 +45,7 @@ class FieldTrackApp extends StatelessWidget {
           fillColor: Color(0xFFF5F5F5),
         ),
       ),
-      // Initial screen is the Login Screen
-      home: const LoginScreen(),
+      home: initialHome,
     );
   }
 }

@@ -8,11 +8,12 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:field_track/main.dart';
+import 'package:field_track/screens/login_screen.dart';
 
 void main() {
   testWidgets('Login screen smoke test', (WidgetTester tester) async {
     // Build our app and trigger a frame.
-    await tester.pumpWidget(const FieldTrackApp());
+    await tester.pumpWidget(const FieldTrackApp(initialHome: LoginScreen()));
 
     // Verify that we are on the login screen
     expect(find.text('LOGIN'), findsOneWidget);

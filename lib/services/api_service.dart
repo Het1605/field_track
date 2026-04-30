@@ -29,6 +29,9 @@ class ApiService {
   // Timeout duration
   static const Duration _timeout = Duration(seconds: 15);
 
+  // Prevent multiple concurrent refreshes
+  bool _isRefreshing = false;
+
   /// Private method to get common headers with JWT authentication
   Future<Map<String, String>> _getHeaders() async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
@@ -41,33 +44,68 @@ class ApiService {
     };
   }
 
-  /// Reusable request handler with centralized error handling
+  /// Reusable request handler with centralized error handling and retry logic
   Future<ApiResponse> _sendRequest(
-    Future<http.Response> Function() request,
-  ) async {
+    Future<http.Response> Function() request, {
+    bool canRetry = true,
+  }) async {
     try {
       final response = await request().timeout(_timeout);
+      
+      // Handle 401 Unauthorized specifically for retry logic
+      if (response.statusCode == 401 && canRetry) {
+        final refreshSuccess = await _attemptTokenRefresh();
+        if (refreshSuccess) {
+          // Retry original request exactly once with new headers
+          return await _sendRequest(request, canRetry: false);
+        }
+      }
+
       return _processResponse(response);
     } on SocketException {
-      return ApiResponse(
-        success: false, 
-        message: 'No internet connection. Please check your network.',
-      );
+      return ApiResponse(success: false, message: 'No internet connection.');
     } on TimeoutException {
-      return ApiResponse(
-        success: false, 
-        message: 'Request timed out. The server is taking too long to respond.',
-      );
-    } on http.ClientException catch (e) {
-      return ApiResponse(
-        success: false, 
-        message: 'Network failure: ${e.message}',
-      );
+      return ApiResponse(success: false, message: 'Request timed out.');
     } catch (e) {
-      return ApiResponse(
-        success: false, 
-        message: 'An unexpected error occurred: ${e.toString()}',
-      );
+      return ApiResponse(success: false, message: 'Connection error: ${e.toString()}');
+    }
+  }
+
+  /// Internal logic to refresh tokens without recursion
+  Future<bool> _attemptTokenRefresh() async {
+    if (_isRefreshing) return false;
+    _isRefreshing = true;
+
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      final String? refreshToken = prefs.getString('refresh_token');
+      
+      if (refreshToken == null) return false;
+
+      final response = await http.post(
+        Uri.parse('$_baseUrl/auth/refresh'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'refresh_token': refreshToken}),
+      ).timeout(_timeout);
+
+      if (response.statusCode == 200) {
+        final body = json.decode(response.body);
+        final String? newAccess = body['access_token'];
+        final String? newRefresh = body['refresh_token'];
+
+        if (newAccess != null) {
+          await prefs.setString('auth_token', newAccess);
+          if (newRefresh != null) {
+            await prefs.setString('refresh_token', newRefresh);
+          }
+          return true;
+        }
+      }
+      return false;
+    } catch (e) {
+      return false;
+    } finally {
+      _isRefreshing = false;
     }
   }
 
@@ -81,14 +119,9 @@ class ApiService {
     }
 
     if (response.statusCode >= 200 && response.statusCode < 300) {
-      return ApiResponse(
-        success: true,
-        data: body,
-        message: 'Success',
-      );
+      return ApiResponse(success: true, data: body, message: 'Success');
     }
 
-    // Extract error message from backend if available
     String? backendMessage;
     if (body is Map && body.containsKey('detail')) {
       backendMessage = body['detail'].toString();
@@ -96,91 +129,68 @@ class ApiService {
       backendMessage = body['message'].toString();
     }
 
-    // Handle Specific Error Status Codes
     switch (response.statusCode) {
       case 401:
-        return ApiResponse(
-          success: false,
-          message: backendMessage ?? 'Unauthorized: Session expired or invalid token.',
-        );
+        return ApiResponse(success: false, message: backendMessage ?? 'Session expired.');
       case 403:
-        return ApiResponse(
-          success: false,
-          message: backendMessage ?? 'Forbidden: You do not have permission to access this resource.',
-        );
+        return ApiResponse(success: false, message: 'Permission denied.');
       case 404:
-        return ApiResponse(
-          success: false,
-          message: backendMessage ?? 'Resource not found.',
-        );
+        return ApiResponse(success: false, message: 'Not found.');
       case 422:
-        return ApiResponse(
-          success: false,
-          message: backendMessage ?? 'Validation Error: Please check your input.',
-          data: body,
-        );
+        return ApiResponse(success: false, message: backendMessage ?? 'Validation error.', data: body);
       case 500:
-        return ApiResponse(
-          success: false,
-          message: backendMessage ?? 'Internal Server Error. Please try again later.',
-        );
+        return ApiResponse(success: false, message: 'Server error.');
       default:
-        return ApiResponse(
-          success: false,
-          data: body,
-          message: backendMessage ?? 'Unexpected error occurred: ${response.statusCode}',
-        );
+        return ApiResponse(success: false, message: 'Error: ${response.statusCode}');
     }
   }
 
   /// GET Request
   Future<ApiResponse> get(String endpoint) async {
-    final headers = await _getHeaders();
-    return _sendRequest(() => http.get(
-      Uri.parse('$_baseUrl$endpoint'),
-      headers: headers,
-    ));
+    return _sendRequest(() async {
+      final headers = await _getHeaders();
+      return http.get(Uri.parse('$_baseUrl$endpoint'), headers: headers);
+    });
   }
 
   /// POST Request
   Future<ApiResponse> post(String endpoint, dynamic body) async {
-    final headers = await _getHeaders();
-    return _sendRequest(() => http.post(
-      Uri.parse('$_baseUrl$endpoint'),
-      headers: headers,
-      body: json.encode(body),
-    ));
+    return _sendRequest(() async {
+      final headers = await _getHeaders();
+      return http.post(
+        Uri.parse('$_baseUrl$endpoint'),
+        headers: headers,
+        body: json.encode(body),
+      );
+    });
   }
 
-  /// POST Form-UrlEncoded Request (Used for OAuth2/FastAPI Login)
+  /// POST Form-UrlEncoded Request
   Future<ApiResponse> postForm(String endpoint, Map<String, String> body) async {
-    final headers = await _getHeaders();
-    // Override Content-Type for form-urlencoded
-    headers['Content-Type'] = 'application/x-www-form-urlencoded';
-    
-    return _sendRequest(() => http.post(
-      Uri.parse('$_baseUrl$endpoint'),
-      headers: headers,
-      body: body, // The http package automatically handles form encoding for Maps
-    ));
+    return _sendRequest(() async {
+      final headers = await _getHeaders();
+      headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      return http.post(Uri.parse('$_baseUrl$endpoint'), headers: headers, body: body);
+    });
   }
 
   /// PUT Request
   Future<ApiResponse> put(String endpoint, dynamic body) async {
-    final headers = await _getHeaders();
-    return _sendRequest(() => http.put(
-      Uri.parse('$_baseUrl$endpoint'),
-      headers: headers,
-      body: json.encode(body),
-    ));
+    return _sendRequest(() async {
+      final headers = await _getHeaders();
+      return http.put(
+        Uri.parse('$_baseUrl$endpoint'),
+        headers: headers,
+        body: json.encode(body),
+      );
+    });
   }
 
   /// DELETE Request
   Future<ApiResponse> delete(String endpoint) async {
-    final headers = await _getHeaders();
-    return _sendRequest(() => http.delete(
-      Uri.parse('$_baseUrl$endpoint'),
-      headers: headers,
-    ));
+    return _sendRequest(() async {
+      final headers = await _getHeaders();
+      return http.delete(Uri.parse('$_baseUrl$endpoint'), headers: headers);
+    });
   }
 }
