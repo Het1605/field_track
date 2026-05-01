@@ -16,18 +16,31 @@ class LocationTrackingService {
 
   /// Handles location permission requests (Foreground and Notifications)
   Future<bool> handlePermissions() async {
-    // 1. Request Foreground Location
+    // 1. Check Foreground Location Status
     PermissionStatus status = await Permission.location.status;
+    
+    if (status.isPermanentlyDenied) {
+      // If permanently denied, take them to settings so they can enable it manually
+      await openAppSettings();
+      return false;
+    }
+
     if (status.isDenied) {
+      // If denied (first time or second time), request it again
       status = await Permission.location.request();
+      if (status.isPermanentlyDenied) {
+        await openAppSettings();
+        return false;
+      }
     }
     
-    if (status.isPermanentlyDenied || status.isDenied) {
+    if (!status.isGranted) {
       return false;
     }
 
     // 2. Request Notification Permission (Required for Background Service tray icon)
-    if (await Permission.notification.isDenied) {
+    PermissionStatus notificationStatus = await Permission.notification.status;
+    if (notificationStatus.isDenied) {
       await Permission.notification.request();
     }
 
