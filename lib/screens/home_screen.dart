@@ -131,14 +131,9 @@ class _HomeScreenState extends State<HomeScreen> {
           _selectedCompanyId = companyId;
           _startTime = formattedStart;
         });
-
-        // If background service is NOT running, it means app was killed/restarted
-        final service = FlutterBackgroundService();
-        if (!(await service.isRunning())) {
-          _showResumeJourneyDialog();
-        }
       } else {
-        // No active journey on backend -> Clear local state
+        // No active journey on backend -> Clear local journey state ONLY
+        // We do NOT clear _selectedCompanyId here because the user needs it to start a new trip!
         await prefs.remove('active_journey_id');
         await prefs.remove('journey_start_time');
         setState(() {
@@ -333,7 +328,25 @@ class _HomeScreenState extends State<HomeScreen> {
 
   /// Ends the journey and stops the background service
   Future<void> _endJourney() async {
-    if (_activeJourneyId == null || _selectedCompanyId == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    
+    // 1. Double-check IDs (Check memory first, then fallback to SharedPreferences)
+    String? jId = _activeJourneyId;
+    if (jId == null || jId == "null") {
+      jId = prefs.getString('active_journey_id');
+    }
+
+    int? cId = _selectedCompanyId;
+    if (cId == null) {
+      cId = prefs.getInt('selected_company_id');
+    }
+
+    // If still null, the session is truly lost. Force reset UI.
+    if (jId == null || jId == "null" || cId == null) {
+      debugPrint("[End] Critical Error: Journey ID or Company ID missing. Force resetting state.");
+      await _forceResetLocalState();
+      return;
+    }
 
     setState(() => _isLoading = true);
     try {
@@ -355,23 +368,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
       // 3. Call End API
       final response = await _apiService.post('/location/end', {
-        'journey_id': _activeJourneyId,
-        'company_id': _selectedCompanyId,
+        'journey_id': jId,
+        'company_id': cId,
         'end_lat': lat,
         'end_lng': lng,
       });
 
-      if (response.success) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.remove('active_journey_id');
-        await prefs.remove('journey_start_time');
-
-        setState(() {
-          _activeJourneyId = null;
-          _startTime = null;
-        });
-
-        if (mounted) {
+      if (response.success || response.message.contains("404") || response.message.contains("not found")) {
+        // If success OR if the journey was already ended on the server (404)
+        await _forceResetLocalState();
+        
+        if (mounted && response.success) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Journey and tracking stopped'),
@@ -401,6 +408,22 @@ class _HomeScreenState extends State<HomeScreen> {
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
+  }
+
+  /// Force clears all local journey tracking data to fix stuck UI
+  Future<void> _forceResetLocalState() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('active_journey_id');
+    await prefs.remove('journey_start_time');
+    
+    // Stop background tasks
+    _locationService.stopTracking();
+    FlutterBackgroundService().invoke("stopService");
+
+    setState(() {
+      _activeJourneyId = null;
+      _startTime = null;
+    });
   }
 
   void _handleLogout() async {

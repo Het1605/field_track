@@ -75,8 +75,20 @@ class LocationTrackingService {
     debugPrint('GPS Tracking Engine stopped.');
   }
 
+  Future<void> _handlePermissionsAndTrack(String journeyId, int companyId) async {
+    if (journeyId == "null" || journeyId.isEmpty) {
+      debugPrint('GPS: Invalid Journey ID provided. Skipping tracking.');
+      return;
+    }
+    // ...
+  }
+
   /// Fetches GPS, saves locally, and attempts batch sync (Public for Background Service)
   Future<void> trackAndSave(String journeyId, int companyId) async {
+    if (journeyId == "null" || journeyId.isEmpty) {
+      debugPrint('GPS: Refusing to save location for invalid Journey ID.');
+      return;
+    }
     try {
       // 1. Fetch current GPS position
       Position position = await Geolocator.getCurrentPosition(
