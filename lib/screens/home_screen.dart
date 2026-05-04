@@ -8,6 +8,7 @@ import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/location_service.dart';
 import 'change_password_screen.dart'; // New Import
+import 'profile_screen.dart';
 import 'login_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -539,7 +540,13 @@ class _HomeScreenState extends State<HomeScreen> {
         actions: [
           PopupMenuButton<String>(
             onSelected: (value) {
-              if (value == 'profile') {
+              if (value == 'my_profile') {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const ProfileScreen(),
+                  ),
+                );
+              } else if (value == 'change_password') {
                 Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (_) => const ChangePasswordScreen(),
@@ -556,7 +563,17 @@ class _HomeScreenState extends State<HomeScreen> {
             itemBuilder:
                 (context) => [
                   const PopupMenuItem(
-                    value: 'profile',
+                    value: 'my_profile',
+                    child: Row(
+                      children: [
+                        Icon(Icons.person_outline_rounded, color: Colors.blue),
+                        SizedBox(width: 12),
+                        Text('My Profile'),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuItem(
+                    value: 'change_password',
                     child: Row(
                       children: [
                         Icon(Icons.lock_reset_rounded, color: Colors.blueGrey),
