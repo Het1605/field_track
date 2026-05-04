@@ -617,59 +617,120 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             if (!_isSessionValid) _buildSessionWarningBanner(),
             Expanded(
-              child: SingleChildScrollView(
-                physics: const BouncingScrollPhysics(),
-                child: Padding(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: isLargeScreen ? size.width * 0.2 : 24.0,
-                    vertical: size.height * 0.05,
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      if (_companies.length > 1) ...[
-                        _buildCompanySelector(),
-                        SizedBox(height: size.height * 0.05),
-                      ],
+              child: _companies.isEmpty
+                  ? _buildNoCompanyState()
+                  : _buildTrackingContent(size, isLargeScreen),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
-                      _buildStatusVisualizer(size),
-
-                      SizedBox(height: size.height * 0.05),
-
-                      Text(
-                        isTracking ? 'Tracking in Progress' : 'Not Tracking',
-                        style: TextStyle(
-                          fontSize: isLargeScreen ? 32 : 26,
-                          fontWeight: FontWeight.w800,
-                          color:
-                              isTracking
-                                  ? Colors.green.shade700
-                                  : Colors.blueGrey.shade700,
-                          letterSpacing: -0.5,
-                        ),
-                      ),
-
-                      const SizedBox(height: 12),
-
-                      if (isTracking && _startTime != null)
-                        _buildStartTimeBadge(),
-
-                      SizedBox(height: size.height * 0.1),
-
-                      _buildMainActionButton(),
-
-                      const SizedBox(height: 20),
-                      const Text(
-                        'GPS tracking active during journey.',
-                        style: TextStyle(
-                          color: Colors.blueGrey,
-                          fontSize: 12,
-                          fontStyle: FontStyle.italic,
-                        ),
-                      ),
-                    ],
-                  ),
+  Widget _buildNoCompanyState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.orange.withAlpha(20),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.domain_disabled,
+                size: 64,
+                color: Colors.orange,
+              ),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              'No Company Assigned',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFF1E293B),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'You are not assigned to any company yet. Please contact your administrator to get started.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 15,
+                color: Color(0xFF64748B),
+                height: 1.5,
+              ),
+            ),
+            const SizedBox(height: 32),
+            ElevatedButton.icon(
+              onPressed: _isLoading ? null : _initializeData,
+              icon: _isLoading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh_rounded),
+              label: const Text('Refresh Status'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF2563EB),
+                foregroundColor: Colors.white,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
                 ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTrackingContent(Size size, bool isLargeScreen) {
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: isLargeScreen ? size.width * 0.2 : 24.0,
+          vertical: size.height * 0.05,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            if (_companies.length > 1) ...[
+              _buildCompanySelector(),
+              SizedBox(height: size.height * 0.05),
+            ],
+            _buildStatusVisualizer(size),
+            SizedBox(height: size.height * 0.05),
+            Text(
+              isTracking ? 'Tracking in Progress' : 'Not Tracking',
+              style: TextStyle(
+                fontSize: isLargeScreen ? 32 : 26,
+                fontWeight: FontWeight.w800,
+                color: isTracking
+                    ? Colors.green.shade700
+                    : Colors.blueGrey.shade700,
+                letterSpacing: -0.5,
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (isTracking && _startTime != null) _buildStartTimeBadge(),
+            SizedBox(height: size.height * 0.1),
+            _buildMainActionButton(),
+            const SizedBox(height: 20),
+            const Text(
+              'GPS tracking active during journey.',
+              style: TextStyle(
+                color: Colors.blueGrey,
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
               ),
             ),
           ],

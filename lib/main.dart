@@ -27,6 +27,8 @@ void main() async {
   ));
 }
 
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
 class FieldTrackApp extends StatelessWidget {
   final Widget initialHome;
   const FieldTrackApp({super.key, required this.initialHome});
@@ -34,6 +36,7 @@ class FieldTrackApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'Field Track',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(

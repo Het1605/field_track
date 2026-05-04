@@ -4,6 +4,9 @@ import 'dart:async';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:flutter/material.dart';
+import '../main.dart';
+import '../screens/login_screen.dart';
 
 /// Standardized Response Object for all API calls
 class ApiResponse {
@@ -101,12 +104,29 @@ class ApiService {
           return true;
         }
       }
+      
+      // If we reach here, refresh failed (user might be deleted or token expired)
+      _forceLogout();
       return false;
     } catch (e) {
       return false;
     } finally {
       _isRefreshing = false;
     }
+  }
+
+  /// Clears session and redirects to login
+  void _forceLogout() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.remove('auth_token');
+    await prefs.remove('refresh_token');
+    await prefs.remove('active_journey_id');
+
+    // Use global navigator key to push login screen
+    navigatorKey.currentState?.pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (route) => false,
+    );
   }
 
   /// Centralized response processing logic
@@ -131,6 +151,8 @@ class ApiService {
 
     switch (response.statusCode) {
       case 401:
+        // If we reach here, it means retry also failed or wasn't allowed
+        _forceLogout();
         return ApiResponse(success: false, message: backendMessage ?? 'Session expired.');
       case 403:
         return ApiResponse(success: false, message: 'Permission denied.');
