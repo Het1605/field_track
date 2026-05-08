@@ -100,9 +100,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
       debugPrint("[Sync] Backend Response Data: ${response.data}");
 
-      if (response.success && response.data != null && response.data['data'] != null) {
+      if (response.success && response.data != null) {
         // Backend says there is an active journey
-        final dynamic journeyData = response.data['data'];
+        final dynamic journeyData = response.data;
         final String journeyId = journeyData['id'].toString();
         final int? companyId = journeyData['company_id'];
         final String? startTime = journeyData['start_time'];
@@ -257,7 +257,7 @@ class _HomeScreenState extends State<HomeScreen> {
       });
 
       if (response.success && response.data != null) {
-        final dynamic journeyData = response.data['data'];
+        final dynamic journeyData = response.data;
         final String journeyId = journeyData['id'].toString();
 
         final prefs = await SharedPreferences.getInstance();

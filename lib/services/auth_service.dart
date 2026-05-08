@@ -11,7 +11,7 @@ class AuthService {
     final response = await _apiService.postForm('/auth/login', {
       'username': email,
       'password': password,
-    });
+    }, isAuth: true);
 
     if (response.success && response.data != null) {
       final String? accessToken = response.data['access_token'];
@@ -34,7 +34,7 @@ class AuthService {
 
     final response = await _apiService.post('/auth/refresh', {
       'refresh_token': refreshToken,
-    });
+    }, isAuth: true);
 
     if (response.success && response.data != null) {
       final String? newAccess = response.data['access_token'];
@@ -86,6 +86,6 @@ class AuthService {
   Future<ApiResponse> forgotPassword(String email) async {
     return await _apiService.post('/auth/reset-password', {
       'email': email,
-    });
+    }, isAuth: true);
   }
 }

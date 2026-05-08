@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import '../services/auth_service.dart';
-import 'home_screen.dart';
 import 'forgot_password_screen.dart';
+import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -151,8 +152,11 @@ class _LoginScreenState extends State<LoginScreen> {
                           controller: _emailController,
                           icon: Icons.mail_outline,
                           keyboardType: TextInputType.emailAddress,
-                          validator: (value) => (value == null || value.isEmpty) 
-                              ? 'Please enter your email' : null,
+                          validator:
+                              (value) =>
+                                  (value == null || value.isEmpty)
+                                      ? 'Please enter your email'
+                                      : null,
                         ),
                         const SizedBox(height: 20),
 
@@ -163,18 +167,24 @@ class _LoginScreenState extends State<LoginScreen> {
                           controller: _passwordController,
                           icon: Icons.lock_outline,
                           isObscure: _isObscured,
-                          toggleObscure: () => setState(() => _isObscured = !_isObscured),
-                          validator: (value) => (value == null || value.isEmpty) 
-                              ? 'Please enter your password' : null,
+                          toggleObscure:
+                              () => setState(() => _isObscured = !_isObscured),
+                          validator:
+                              (value) =>
+                                  (value == null || value.isEmpty)
+                                      ? 'Please enter your password'
+                                      : null,
                         ),
-                        
+
                         // Forgot Password Aligned to Right
                         Align(
                           alignment: Alignment.centerRight,
                           child: TextButton(
                             onPressed: () {
                               Navigator.of(context).push(
-                                MaterialPageRoute(builder: (_) => const ForgotPasswordScreen()),
+                                MaterialPageRoute(
+                                  builder: (_) => const ForgotPasswordScreen(),
+                                ),
                               );
                             },
                             style: TextButton.styleFrom(
@@ -205,14 +215,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                 ),
-                
+
                 const SizedBox(height: 32),
                 const Text(
                   '© 2026 Field Track EMS. All rights reserved.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Color(0xFF94A3B8),
-                  ),
+                  style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
                 ),
               ],
             ),
@@ -236,7 +243,11 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
         ],
       ),
-      child: const Icon(Icons.analytics_outlined, size: 50, color: Color(0xFF2563EB)),
+      child: const Icon(
+        Icons.analytics_outlined,
+        size: 50,
+        color: Color(0xFF2563EB),
+      ),
     );
   }
 
@@ -271,17 +282,23 @@ class _LoginScreenState extends State<LoginScreen> {
             hintText: hint,
             hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
             prefixIcon: Icon(icon, size: 20),
-            suffixIcon: toggleObscure != null
-                ? IconButton(
-                    icon: Icon(
-                      isObscure ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                      size: 20,
-                      color: const Color(0xFF64748B),
-                    ),
-                    onPressed: toggleObscure,
-                  )
-                : null,
-            contentPadding: const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+            suffixIcon:
+                toggleObscure != null
+                    ? IconButton(
+                      icon: Icon(
+                        isObscure
+                            ? Icons.visibility_off_outlined
+                            : Icons.visibility_outlined,
+                        size: 20,
+                        color: const Color(0xFF64748B),
+                      ),
+                      onPressed: toggleObscure,
+                    )
+                    : null,
+            contentPadding: const EdgeInsets.symmetric(
+              vertical: 16,
+              horizontal: 16,
+            ),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(12),
               borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
@@ -336,30 +353,32 @@ class _LoginScreenState extends State<LoginScreen> {
         backgroundColor: const Color(0xFF2563EB),
         foregroundColor: Colors.white,
         padding: const EdgeInsets.symmetric(vertical: 18),
-        minimumSize: const Size(double.infinity, 56), // Full width and good height
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+        minimumSize: const Size(
+          double.infinity,
+          56,
+        ), // Full width and good height
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         elevation: 0,
         disabledBackgroundColor: const Color(0xFF93C5FD),
       ),
-      child: _isLoading
-          ? const SizedBox(
-              height: 24,
-              width: 24,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Colors.white,
+      child:
+          _isLoading
+              ? const SizedBox(
+                height: 24,
+                width: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
+              )
+              : const Text(
+                'Login',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
+                ),
               ),
-            )
-          : const Text(
-              'Login',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.2,
-              ),
-            ),
     );
   }
 }
