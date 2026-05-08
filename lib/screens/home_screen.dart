@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
 import 'package:geolocator/geolocator.dart'; // Added for Position type
@@ -8,8 +10,8 @@ import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/location_service.dart';
 import 'change_password_screen.dart'; // New Import
-import 'profile_screen.dart';
 import 'login_screen.dart';
+import 'profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -18,10 +20,11 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final ApiService _apiService = ApiService();
   final AuthService _authService = AuthService();
   final LocationTrackingService _locationService = LocationTrackingService();
+  Timer? _syncTimer;
 
   bool _isLoading = false;
   bool _isInitializing = true;
@@ -36,13 +39,35 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initializeData();
+    _startSyncTimer();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Sync journey status whenever user returns to the app
+      _syncActiveJourney();
+    }
   }
 
   @override
   void dispose() {
+    _syncTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     _locationService.stopTracking();
     super.dispose();
+  }
+
+  /// Periodically checks if the journey is still active on the server
+  void _startSyncTimer() {
+    _syncTimer?.cancel();
+    _syncTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (isTracking && !_isLoading) {
+        _syncActiveJourney();
+      }
+    });
   }
 
   /// Initial data load: Companies and Active Journey
@@ -107,11 +132,13 @@ class _HomeScreenState extends State<HomeScreen> {
         final int? companyId = journeyData['company_id'];
         final String? startTime = journeyData['start_time'];
 
-        debugPrint("[Sync] Active Journey Found: $journeyId for Company: $companyId");
+        debugPrint(
+          "[Sync] Active Journey Found: $journeyId for Company: $companyId",
+        );
 
         if (companyId == null) {
-           debugPrint("[Sync] Error: company_id is null");
-           return;
+          debugPrint("[Sync] Error: company_id is null");
+          return;
         }
 
         // Format start time for UI
@@ -119,22 +146,37 @@ class _HomeScreenState extends State<HomeScreen> {
         if (startTime != null) {
           try {
             final dt = DateTime.parse(startTime).toLocal();
-            formattedStart = "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+            formattedStart =
+                "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
           } catch (_) {}
         }
 
         // Sync local storage
         await prefs.setString('active_journey_id', journeyId);
         await prefs.setInt('selected_company_id', companyId);
-        
+
         setState(() {
           _activeJourneyId = journeyId;
           _selectedCompanyId = companyId;
           _startTime = formattedStart;
         });
       } else {
-        // No active journey on backend -> Clear local journey state ONLY
-        // We do NOT clear _selectedCompanyId here because the user needs it to start a new trip!
+        // No active journey on backend -> Clear local journey state AND stop background tracking
+        if (_activeJourneyId != null) {
+          debugPrint(
+            "[Sync] Journey ended on server. Stopping local tracking.",
+          );
+          _locationService.stopTracking();
+          try {
+            final service = FlutterBackgroundService();
+            if (await service.isRunning()) {
+              service.invoke("stopService");
+            }
+          } catch (e) {
+            debugPrint("Error stopping service during sync: $e");
+          }
+        }
+
         await prefs.remove('active_journey_id');
         await prefs.remove('journey_start_time');
         setState(() {
@@ -152,41 +194,49 @@ class _HomeScreenState extends State<HomeScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Row(
-          children: [
-            Icon(Icons.history_rounded, color: Colors.blue),
-            SizedBox(width: 12),
-            Text('Active Journey Found'),
-          ],
-        ),
-        content: Text(
-          'A journey started at $_startTime was found in progress. Would you like to resume tracking or end it now?',
-          softWrap: true,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await _endJourney();
-            },
-            child: const Text('End Journey', style: TextStyle(color: Colors.red)),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              _resumeTracking();
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green.shade600,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      builder:
+          (context) => AlertDialog(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
             ),
-            child: const Text('Resume Journey'),
+            title: const Row(
+              children: [
+                Icon(Icons.history_rounded, color: Colors.blue),
+                SizedBox(width: 12),
+                Text('Active Journey Found'),
+              ],
+            ),
+            content: Text(
+              'A journey started at $_startTime was found in progress. Would you like to resume tracking or end it now?',
+              softWrap: true,
+            ),
+            actions: [
+              TextButton(
+                onPressed: () async {
+                  Navigator.pop(context);
+                  await _endJourney();
+                },
+                child: const Text(
+                  'End Journey',
+                  style: TextStyle(color: Colors.red),
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  Navigator.pop(context);
+                  _resumeTracking();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green.shade600,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                child: const Text('Resume Journey'),
+              ),
+            ],
           ),
-        ],
-      ),
     );
   }
 
@@ -330,7 +380,7 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Ends the journey and stops the background service
   Future<void> _endJourney() async {
     final prefs = await SharedPreferences.getInstance();
-    
+
     // 1. Double-check IDs (Check memory first, then fallback to SharedPreferences)
     String? jId = _activeJourneyId;
     if (jId == null || jId == "null") {
@@ -344,7 +394,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     // If still null, the session is truly lost. Force reset UI.
     if (jId == null || jId == "null" || cId == null) {
-      debugPrint("[End] Critical Error: Journey ID or Company ID missing. Force resetting state.");
+      debugPrint(
+        "[End] Critical Error: Journey ID or Company ID missing. Force resetting state.",
+      );
       await _forceResetLocalState();
       return;
     }
@@ -375,15 +427,33 @@ class _HomeScreenState extends State<HomeScreen> {
         'end_lng': lng,
       });
 
-      if (response.success || response.message.contains("404") || response.message.contains("not found")) {
+      if (response.success ||
+          response.message.contains("404") ||
+          response.message.contains("not found")) {
         // If success OR if the journey was already ended on the server (404)
         await _forceResetLocalState();
-        
+
         if (mounted && response.success) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Journey and tracking stopped'),
               backgroundColor: Colors.blue,
+            ),
+          );
+        }
+      } else if (response.message.toLowerCase().contains(
+            "stopped by administrator",
+          ) ||
+          response.message.contains("JOURNEY_STOPPED_BY_ADMIN")) {
+        // ADMIN STOP CASE: Force reset UI immediately
+        await _forceResetLocalState();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'This journey was already ended by the administrator.',
+              ),
+              backgroundColor: Colors.orange,
             ),
           );
         }
@@ -416,7 +486,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('active_journey_id');
     await prefs.remove('journey_start_time');
-    
+
     // Stop background tasks
     _locationService.stopTracking();
     FlutterBackgroundService().invoke("stopService");
@@ -542,9 +612,7 @@ class _HomeScreenState extends State<HomeScreen> {
             onSelected: (value) {
               if (value == 'my_profile') {
                 Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const ProfileScreen(),
-                  ),
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
                 );
               } else if (value == 'change_password') {
                 Navigator.of(context).push(
@@ -617,9 +685,10 @@ class _HomeScreenState extends State<HomeScreen> {
           children: [
             if (!_isSessionValid) _buildSessionWarningBanner(),
             Expanded(
-              child: _companies.isEmpty
-                  ? _buildNoCompanyState()
-                  : _buildTrackingContent(size, isLargeScreen),
+              child:
+                  _companies.isEmpty
+                      ? _buildNoCompanyState()
+                      : _buildTrackingContent(size, isLargeScreen),
             ),
           ],
         ),
@@ -668,19 +737,22 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 32),
             ElevatedButton.icon(
               onPressed: _isLoading ? null : _initializeData,
-              icon: _isLoading
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh_rounded),
+              icon:
+                  _isLoading
+                      ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                      : const Icon(Icons.refresh_rounded),
               label: const Text('Refresh Status'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF2563EB),
                 foregroundColor: Colors.white,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 12,
+                ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
                 ),
@@ -714,9 +786,10 @@ class _HomeScreenState extends State<HomeScreen> {
               style: TextStyle(
                 fontSize: isLargeScreen ? 32 : 26,
                 fontWeight: FontWeight.w800,
-                color: isTracking
-                    ? Colors.green.shade700
-                    : Colors.blueGrey.shade700,
+                color:
+                    isTracking
+                        ? Colors.green.shade700
+                        : Colors.blueGrey.shade700,
                 letterSpacing: -0.5,
               ),
             ),

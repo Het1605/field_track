@@ -154,6 +154,22 @@ class ApiService {
     );
   }
 
+  /// Stops tracking service and clears journey state without logging out
+  void _stopBackgroundJourney() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.remove('active_journey_id');
+
+    try {
+      final service = FlutterBackgroundService();
+      if (await service.isRunning()) {
+        service.invoke("stopService");
+        debugPrint("Background Tracking Service stopped by Admin signal.");
+      }
+    } catch (e) {
+      debugPrint("Error stopping background service: $e");
+    }
+  }
+
   /// Centralized response processing logic
   ApiResponse _processResponse(http.Response response, {bool isAuth = false}) {
     dynamic body;
@@ -194,6 +210,13 @@ class ApiService {
           message: backendMessage ?? 'Invalid credentials.',
         );
       case 403:
+        if (backendMessage == "JOURNEY_STOPPED_BY_ADMIN") {
+          _stopBackgroundJourney();
+          return ApiResponse(
+            success: false,
+            message: 'Journey stopped by administrator.',
+          );
+        }
         return ApiResponse(success: false, message: 'Permission denied.');
       case 404:
         return ApiResponse(success: false, message: 'Not found.');
