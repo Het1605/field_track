@@ -40,13 +40,20 @@ class LocationTrackingService {
       return false;
     }
 
-    // 2. Request Notification Permission (Required for Background Service tray icon)
+    // 2. Request Background Location (Required for Android 10+ and iOS background tracking)
+    // On Android 11+, this must be requested AFTER foreground permission is granted.
+    PermissionStatus alwaysStatus = await Permission.locationAlways.status;
+    if (alwaysStatus.isDenied) {
+      alwaysStatus = await Permission.locationAlways.request();
+    }
+
+    // 3. Request Notification Permission (Required for Background Service tray icon)
     PermissionStatus notificationStatus = await Permission.notification.status;
     if (notificationStatus.isDenied) {
       await Permission.notification.request();
     }
 
-    return status.isGranted;
+    return status.isGranted && alwaysStatus.isGranted;
   }
 
   /// Fetches the current GPS position
@@ -106,7 +113,7 @@ class LocationTrackingService {
     }
   }
 
-  /// Fetches all unsent locations and sends them in a single batch to the backend
+  /// Retrieves all stored locations and attempts to sync them with the backend
   Future<void> sendStoredLocations(int companyId) async {
     try {
       // 0. Clean up any records with invalid IDs first

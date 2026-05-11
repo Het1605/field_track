@@ -26,8 +26,29 @@ class ApiResponse {
 
 /// Centralized API Service Layer for Field Track
 class ApiService {
-  // Base URL Configuration (Strictly loaded from .env)
-  final String _baseUrl = dotenv.env['BASE_URL'] ?? "";
+  // Base URL Configuration (Cached from SharedPreferences for background isolate safety)
+  String _baseUrl = "";
+
+  ApiService() {
+    _initBaseUrl();
+  }
+
+  Future<void> _initBaseUrl() async {
+    // 1. Try Loading from dotenv (Main Isolate)
+    _baseUrl = dotenv.env['BASE_URL'] ?? "";
+
+    // 2. Fallback to SharedPreferences (Background Isolate)
+    if (_baseUrl.isEmpty) {
+      final prefs = await SharedPreferences.getInstance();
+      _baseUrl = prefs.getString('api_base_url') ?? "";
+    }
+  }
+
+  /// Helper to ensure URL is ready before request
+  Future<String> _getValidBaseUrl() async {
+    if (_baseUrl.isEmpty) await _initBaseUrl();
+    return _baseUrl;
+  }
 
   // Timeout duration
   static const Duration _timeout = Duration(seconds: 15);
@@ -58,11 +79,9 @@ class ApiService {
       final response = await request().timeout(_timeout);
 
       // Handle 401 Unauthorized specifically for retry logic
-      // DO NOT retry for login requests
       if (response.statusCode == 401 && canRetry && !isAuth) {
         final refreshSuccess = await _attemptTokenRefresh();
         if (refreshSuccess) {
-          // Retry original request exactly once with new headers
           return await _sendRequest(request, canRetry: false, isAuth: isAuth);
         }
       }
@@ -73,6 +92,7 @@ class ApiService {
     } on TimeoutException {
       return ApiResponse(success: false, message: 'Request timed out.');
     } catch (e) {
+      debugPrint('[API Error] $e');
       return ApiResponse(
         success: false,
         message: 'Connection error: ${e.toString()}',
@@ -221,26 +241,39 @@ class ApiService {
       case 404:
         return ApiResponse(success: false, message: 'Not found.');
       case 422:
-        return ApiResponse(
-          success: false,
-          message: backendMessage ?? 'Validation error.',
-          data: body,
-        );
+        final errorResponse = json.decode(response.body);
+        final String message = errorResponse['detail'] ??
+            errorResponse['message'] ??
+            'Unknown server error (${response.statusCode})';
+
+        debugPrint('[API FAIL] Response: ${response.body}');
+        return ApiResponse(success: false, message: message);
       case 500:
+        debugPrint('[API FAIL] Response: ${response.body}');
         return ApiResponse(success: false, message: 'Server error.');
       default:
-        return ApiResponse(
-          success: false,
-          message: 'Error: ${response.statusCode}',
-        );
+        try {
+          debugPrint('[API FAIL] Response: ${response.body}');
+          return ApiResponse(
+            success: false,
+            message: 'Error: ${response.statusCode}',
+          );
+        } catch (e) {
+          debugPrint('[API FAIL] Could not parse error body: ${response.body}');
+          return ApiResponse(
+            success: false,
+            message: 'Server error (${response.statusCode})',
+          );
+        }
     }
   }
 
   /// GET Request
   Future<ApiResponse> get(String endpoint, {bool isAuth = false}) async {
+    final baseUrl = await _getValidBaseUrl();
     return _sendRequest(() async {
       final headers = await _getHeaders(isAuth: isAuth);
-      return http.get(Uri.parse('$_baseUrl$endpoint'), headers: headers);
+      return http.get(Uri.parse('$baseUrl$endpoint'), headers: headers);
     }, isAuth: isAuth);
   }
 
@@ -250,10 +283,11 @@ class ApiService {
     dynamic body, {
     bool isAuth = false,
   }) async {
+    final baseUrl = await _getValidBaseUrl();
     return _sendRequest(() async {
       final headers = await _getHeaders(isAuth: isAuth);
       return http.post(
-        Uri.parse('$_baseUrl$endpoint'),
+        Uri.parse('$baseUrl$endpoint'),
         headers: headers,
         body: json.encode(body),
       );
@@ -266,11 +300,12 @@ class ApiService {
     Map<String, String> body, {
     bool isAuth = false,
   }) async {
+    final baseUrl = await _getValidBaseUrl();
     return _sendRequest(() async {
       final headers = await _getHeaders(isAuth: isAuth);
       headers['Content-Type'] = 'application/x-www-form-urlencoded';
       return http.post(
-        Uri.parse('$_baseUrl$endpoint'),
+        Uri.parse('$baseUrl$endpoint'),
         headers: headers,
         body: body,
       );
@@ -283,10 +318,11 @@ class ApiService {
     dynamic body, {
     bool isAuth = false,
   }) async {
+    final baseUrl = await _getValidBaseUrl();
     return _sendRequest(() async {
       final headers = await _getHeaders(isAuth: isAuth);
       return http.put(
-        Uri.parse('$_baseUrl$endpoint'),
+        Uri.parse('$baseUrl$endpoint'),
         headers: headers,
         body: json.encode(body),
       );
@@ -295,9 +331,10 @@ class ApiService {
 
   /// DELETE Request
   Future<ApiResponse> delete(String endpoint, {bool isAuth = false}) async {
+    final baseUrl = await _getValidBaseUrl();
     return _sendRequest(() async {
       final headers = await _getHeaders(isAuth: isAuth);
-      return http.delete(Uri.parse('$_baseUrl$endpoint'), headers: headers);
+      return http.delete(Uri.parse('$baseUrl$endpoint'), headers: headers);
     }, isAuth: isAuth);
   }
 }

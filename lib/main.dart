@@ -12,11 +12,17 @@ void main() async {
   // 1. Load Environment Variables (.env)
   await dotenv.load(fileName: ".env");
 
-  // 2. Initialize Background Service
+  // 2. Persist BASE_URL for background isolate access
+  final prefs = await SharedPreferences.getInstance();
+  final String? baseUrl = dotenv.env['BASE_URL'];
+  if (baseUrl != null) {
+    await prefs.setString('api_base_url', baseUrl);
+  }
+
+  // 3. Initialize Background Service
   await BackgroundServiceManager.initializeService();
 
   // 3. Determine Initial Route (Auto-Login)
-  final prefs = await SharedPreferences.getInstance();
   final String? token = prefs.getString('auth_token');
   final bool hasActiveJourney = prefs.getString('active_journey_id') != null;
 

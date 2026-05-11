@@ -22,8 +22,7 @@ void onStart(ServiceInstance service) async {
   LocationTrackingService? trackingService;
 
   try {
-    // CRITICAL: Load environment variables for this specific isolate
-    await dotenv.load();
+    // API Service now automatically loads URL from SharedPreferences for isolate safety
     trackingService = LocationTrackingService();
     debugPrint('[BackgroundService] Successfully initialized Tracking Service.');
   } catch (e) {
@@ -36,11 +35,13 @@ void onStart(ServiceInstance service) async {
 
   // Phase 4 & 5: GPS Tracking + DB Save + API Sync
   Timer.periodic(const Duration(minutes: 3), (timer) async {
-    if (trackingService == null) {
-      debugPrint('[BackgroundService] Skipping tick: trackingService not initialized.');
-      return;
-    }
     try {
+      // 1. Safety check for initialization
+      if (trackingService == null) {
+        debugPrint('[BackgroundService] Sync skipped: Service not ready.');
+        return;
+      }
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
 
@@ -48,11 +49,11 @@ void onStart(ServiceInstance service) async {
       final int? companyId = prefs.getInt('selected_company_id');
 
       if (journeyId != null && companyId != null) {
-        // Trigger the full tracking logic (GPS -> SQLite -> API)
-        await trackingService.trackAndSave(journeyId, companyId);
+        debugPrint('[BackgroundService] Triggering scheduled sync for $journeyId');
+        await trackingService!.trackAndSave(journeyId, companyId);
       }
     } catch (e) {
-      debugPrint('Background Sync Loop Error: $e');
+      debugPrint('[BackgroundService] Timer Error: $e');
     }
   });
 }
