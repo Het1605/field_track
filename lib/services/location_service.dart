@@ -14,6 +14,7 @@ class LocationTrackingService {
   final DatabaseService _dbService = DatabaseService();
   final bool isBackground;
   Timer? _trackingTimer;
+  bool _isSyncing = false;
 
   LocationTrackingService({this.isBackground = false})
     : _apiService = ApiService(isBackground: isBackground);
@@ -124,93 +125,94 @@ class LocationTrackingService {
 
       // 3. ATTEMPT BATCH SYNC
       await sendStoredLocations(companyId);
+      await _updateCacheCount();
     } catch (e) {
       debugPrint('Tracking/Offline Storage Error: $e');
     }
   }
 
-  /// Retrieves all stored locations and attempts to sync them with the backend
+  /// Updates the SharedPreferences with the current number of unsent points
+  Future<void> _updateCacheCount() async {
+    final List<Map<String, dynamic>> points = await _dbService.getAllStoredLocations();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('cached_points_count', points.length);
+  }
+
+  /// Retrieves all stored locations and attempts to sync them in small chunks
   Future<void> sendStoredLocations(int companyId) async {
-    debugPrint('[Sync] Starting stored locations sync...');
+    if (_isSyncing) return;
+    _isSyncing = true;
+
     try {
       final SharedPreferences prefs = await SharedPreferences.getInstance();
-      await prefs.reload(); // CRITICAL: Refresh memory for background isolate
+      await prefs.reload();
       final String? journeyId = prefs.getString('active_journey_id');
 
       // 1. Fetch all unsent locations from SQLite
       final List<Map<String, dynamic>> storedPoints =
           await _dbService.getAllStoredLocations();
       if (storedPoints.isEmpty) {
-        debugPrint('No points to sync.');
+        _isSyncing = false;
         return;
       }
 
-      // 2. Group points by journey_id (in case of multiple abandoned journeys)
+      // 2. Group points by journey_id
       final Map<String, List<Map<String, dynamic>>> groupedByJourney = {};
       for (var point in storedPoints) {
         final rawId = point['journey_id'];
-        if (rawId == null || rawId == 'null')
-          continue; // Skip corrupted/invalid records
-
-        final jId = rawId.toString();
-        groupedByJourney.putIfAbsent(jId, () => []).add(point);
+        if (rawId == null || rawId == 'null') continue;
+        groupedByJourney.putIfAbsent(rawId.toString(), () => []).add(point);
       }
 
-      // 3. Process each journey's points in a single batch request
-      for (var journeyId in groupedByJourney.keys) {
-        final points = groupedByJourney[journeyId]!;
+      // 3. Process each journey
+      for (var jId in groupedByJourney.keys) {
+        final List<Map<String, dynamic>> allPoints = groupedByJourney[jId]!;
 
-        final trackPayload = {
-          'journey_id': journeyId,
-          'company_id': companyId,
-          'locations':
-              points
-                  .map(
-                    (p) => {
-                      'latitude': p['latitude'],
-                      'longitude': p['longitude'],
-                      'recorded_at': p['recorded_at'],
-                    },
-                  )
-                  .toList(),
-        };
+        // CHUNKING: Split allPoints into groups of 20
+        const int chunkSize = 20;
+        for (int i = 0; i < allPoints.length; i += chunkSize) {
+          final int end = (i + chunkSize < allPoints.length)
+              ? i + chunkSize
+              : allPoints.length;
+          final List<Map<String, dynamic>> chunk = allPoints.sublist(i, end);
 
-        debugPrint(
-          'Attempting batch sync for $journeyId (${points.length} points)...',
-        );
+          final trackPayload = {
+            'journey_id': jId,
+            'company_id': companyId,
+            'locations':
+                chunk
+                    .map(
+                      (p) => {
+                        'latitude': p['latitude'],
+                        'longitude': p['longitude'],
+                        'recorded_at': p['recorded_at'],
+                      },
+                    )
+                    .toList(),
+          };
 
-        final response = await _apiService.post(
-          '/location/track',
-          trackPayload,
-        );
-
-        if (response.success) {
-          // 4. DELETE successful records to prevent double-sync
-          final List<int> syncedIds =
-              points.map((p) => p['id'] as int).toList();
-          await _dbService.deleteSyncedRecords(syncedIds);
           debugPrint(
-            'Successfully synced and cleared ${points.length} points for journey $journeyId',
+            '[Sync] Sending chunk for $jId (${chunk.length} points, ${i + chunk.length}/${allPoints.length})...',
           );
-        } else {
-          // Special Case: If journey is stopped/forbidden, clear the points so we don't retry forever
-          if (response.message.contains('stopped') ||
-              response.message.contains('administrator')) {
-            final List<int> syncedIds =
-                points.map((p) => p['id'] as int).toList();
+
+          final response = await _apiService.post('/location/track', trackPayload);
+
+          if (response.success) {
+            final List<int> syncedIds = chunk.map((p) => p['id'] as int).toList();
             await _dbService.deleteSyncedRecords(syncedIds);
-            debugPrint(
-              'Cleared abandoned points for stopped journey: $journeyId',
-            );
           } else {
-            debugPrint(
-              'Sync failed for $journeyId: ${response.message}. Data kept in local DB.',
-            );
+            // IF FAILURE: Stop the loop for this journey immediately. 
+            // We don't want to keep hitting a dead network.
+            debugPrint('[Sync] Chunk failed: ${response.message}. Stopping loop.');
+            break; 
           }
         }
       }
+      await _updateCacheCount();
     } catch (e) {
       debugPrint('Critical Batch Sync Error: $e');
+    } finally {
+      _isSyncing = false;
     }
   }
 }

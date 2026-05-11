@@ -41,6 +41,10 @@ void onStart(ServiceInstance service) async {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
 
+      // DEBUG: Increment heartbeat counter
+      final int currentTicks = prefs.getInt('background_tick_count') ?? 0;
+      await prefs.setInt('background_tick_count', currentTicks + 1);
+
       final String? journeyId = prefs.getString('active_journey_id');
       final int? companyId = prefs.getInt('selected_company_id');
 

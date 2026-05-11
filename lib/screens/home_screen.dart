@@ -70,6 +70,8 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
+  int _heartbeatCount = 0;
+
   /// Initial data load: Companies and Active Journey
   Future<void> _initializeData() async {
     setState(() {
@@ -84,6 +86,19 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     await _syncActiveJourney();
 
     setState(() => _isInitializing = false);
+
+    // 3. Start Cache Monitor (Show number of unsent points)
+    Timer.periodic(const Duration(seconds: 5), (timer) async {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      setState(() {
+        _heartbeatCount = prefs.getInt('cached_points_count') ?? 0;
+      });
+    });
   }
 
   /// Fetch companies assigned to the current user
@@ -167,12 +182,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           debugPrint("[Sync] Auto-starting background service for detected journey.");
           await _resumeTracking();
         }
-      } else {
-        // No active journey on backend -> Clear local journey state AND stop background tracking
+      } else if (response.success && response.data == null) {
+        // ONLY clear local state if server explicitly says "No Active Journey" (success=true, data=null)
         if (_activeJourneyId != null) {
-          debugPrint(
-            "[Sync] Journey ended on server. Stopping local tracking.",
-          );
+          debugPrint("[Sync] Journey ended on server. Stopping local tracking.");
           _locationService.stopTracking();
           try {
             final service = FlutterBackgroundService();
@@ -180,7 +193,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               service.invoke("stopService");
             }
           } catch (e) {
-            debugPrint("Error stopping service during sync: $e");
+            debugPrint("Error stopping background service: $e");
           }
         }
 
@@ -190,6 +203,10 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _activeJourneyId = null;
           _startTime = null;
         });
+      } else {
+        // Network Error or Server Error: DO NOTHING.
+        // We keep the current state (Tracking) until we get a successful answer.
+        debugPrint("[Sync] Network error or server busy. Keeping current journey state.");
       }
     } catch (e) {
       debugPrint("Error syncing active journey: $e");
@@ -615,6 +632,33 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         ),
         centerTitle: true,
         actions: [
+          if (_heartbeatCount > 0)
+            Center(
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withAlpha(20),
+                  borderRadius: BorderRadius.circular(15),
+                  border: Border.all(color: Colors.orange.withAlpha(40)),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.cloud_off, color: Colors.orange, size: 14),
+                    const SizedBox(width: 4),
+                    Text(
+                      '$_heartbeatCount',
+                      style: const TextStyle(
+                        color: Colors.orange,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'my_profile') {
