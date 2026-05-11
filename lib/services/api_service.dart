@@ -28,19 +28,28 @@ class ApiResponse {
 class ApiService {
   // Base URL Configuration (Cached from SharedPreferences for background isolate safety)
   String _baseUrl = "";
+  static String _forcedBaseUrl = "";
 
-  ApiService() {
+  final bool isBackground;
+  String get baseUrl => _baseUrl;
+
+  ApiService({this.isBackground = false}) {
     _initBaseUrl();
   }
 
   Future<void> _initBaseUrl() async {
-    // 1. Try Loading from dotenv (Main Isolate)
-    _baseUrl = dotenv.env['BASE_URL'] ?? "";
+    try {
+      // 1. Try Loading from dotenv
+      _baseUrl = dotenv.env['BASE_URL'] ?? "";
 
-    // 2. Fallback to SharedPreferences (Background Isolate)
-    if (_baseUrl.isEmpty) {
-      final prefs = await SharedPreferences.getInstance();
-      _baseUrl = prefs.getString('api_base_url') ?? "";
+      // 2. Fallback to SharedPreferences (Background Isolate)
+      if (_baseUrl.isEmpty) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.reload(); // Ensure we see latest data
+        _baseUrl = prefs.getString('api_base_url') ?? "";
+      }
+    } catch (e) {
+      debugPrint('[API] Failed to load Base URL: $e');
     }
   }
 
@@ -59,6 +68,7 @@ class ApiService {
   /// Private method to get common headers with JWT authentication
   Future<Map<String, String>> _getHeaders({bool isAuth = false}) async {
     final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.reload(); // Ensure background isolate sees latest tokens
     final String? token = prefs.getString('auth_token');
 
     return {
@@ -76,7 +86,11 @@ class ApiService {
     bool isAuth = false,
   }) async {
     try {
+      debugPrint('[API] we are in send_request');
       final response = await request().timeout(_timeout);
+      debugPrint(
+        '[API] ${response.request?.method} to ${response.request?.url} -> ${response.statusCode}',
+      );
 
       // Handle 401 Unauthorized specifically for retry logic
       if (response.statusCode == 401 && canRetry && !isAuth) {
@@ -167,11 +181,15 @@ class ApiService {
       debugPrint("Error stopping background service: $e");
     }
 
-    // 3. Clear the navigation stack and go to Login
-    navigatorKey.currentState?.pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => const LoginScreen()),
-      (route) => false,
-    );
+    // 3. Clear the navigation stack and go to Login (ONLY if NOT in background)
+    if (!isBackground) {
+      navigatorKey.currentState?.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
+    } else {
+      debugPrint('[API] Force logout requested in background. Skipping UI redirect.');
+    }
   }
 
   /// Stops tracking service and clears journey state without logging out
@@ -205,7 +223,11 @@ class ApiService {
       if (body is Map && body.containsKey('data')) {
         extractedData = body['data'];
       }
-      return ApiResponse(success: true, data: extractedData, message: 'Success');
+      return ApiResponse(
+        success: true,
+        data: extractedData,
+        message: 'Success',
+      );
     }
 
     String? backendMessage;
@@ -242,7 +264,8 @@ class ApiService {
         return ApiResponse(success: false, message: 'Not found.');
       case 422:
         final errorResponse = json.decode(response.body);
-        final String message = errorResponse['detail'] ??
+        final String message =
+            errorResponse['detail'] ??
             errorResponse['message'] ??
             'Unknown server error (${response.statusCode})';
 

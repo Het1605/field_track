@@ -3,18 +3,34 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api_service.dart';
 import 'database_service.dart';
 
 /// Service to handle real-time GPS tracking with offline storage and batch upload
 class LocationTrackingService {
-  final ApiService _apiService = ApiService();
+  final ApiService _apiService;
   final DatabaseService _dbService = DatabaseService();
+  final bool isBackground;
   Timer? _trackingTimer;
 
+  LocationTrackingService({this.isBackground = false})
+    : _apiService = ApiService(isBackground: isBackground);
+
+  /// Ensures that ApiService and DatabaseService are initialized before use
+  Future<void> waitForInit() async {
+    // Wait for ApiService to load its base URL
+    int attempts = 0;
+    while (_apiService.baseUrl.isEmpty && attempts < 10) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      attempts++;
+    }
+    // DatabaseService initializes itself on the first get database call
+  }
+
   // Tracking interval (3 minutes)
-  static const Duration _interval = Duration(minutes: 3);
+  static const Duration _interval = Duration(minutes: 1);
 
   /// Handles location permission requests (Foreground and Notifications)
   Future<bool> handlePermissions() async {
@@ -90,9 +106,9 @@ class LocationTrackingService {
       Position position = await Geolocator.getCurrentPosition(
         locationSettings: const LocationSettings(
           accuracy: LocationAccuracy.high,
-          distanceFilter: 10,
+          distanceFilter: 0,
         ),
-      );
+      ).timeout(const Duration(seconds: 25));
 
       // 2. SAVE LOCALLY (Ensure no data loss even if offline)
       await _dbService.saveLocation(
@@ -115,9 +131,11 @@ class LocationTrackingService {
 
   /// Retrieves all stored locations and attempts to sync them with the backend
   Future<void> sendStoredLocations(int companyId) async {
+    debugPrint('[Sync] Starting stored locations sync...');
     try {
-      // 0. Clean up any records with invalid IDs first
-      await _dbService.deleteCorruptedRecords();
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+      await prefs.reload(); // CRITICAL: Refresh memory for background isolate
+      final String? journeyId = prefs.getString('active_journey_id');
 
       // 1. Fetch all unsent locations from SQLite
       final List<Map<String, dynamic>> storedPoints =
@@ -175,9 +193,20 @@ class LocationTrackingService {
             'Successfully synced and cleared ${points.length} points for journey $journeyId',
           );
         } else {
-          debugPrint(
-            'Sync failed for $journeyId: ${response.message}. Data kept in local DB.',
-          );
+          // Special Case: If journey is stopped/forbidden, clear the points so we don't retry forever
+          if (response.message.contains('stopped') ||
+              response.message.contains('administrator')) {
+            final List<int> syncedIds =
+                points.map((p) => p['id'] as int).toList();
+            await _dbService.deleteSyncedRecords(syncedIds);
+            debugPrint(
+              'Cleared abandoned points for stopped journey: $journeyId',
+            );
+          } else {
+            debugPrint(
+              'Sync failed for $journeyId: ${response.message}. Data kept in local DB.',
+            );
+          }
         }
       }
     } catch (e) {

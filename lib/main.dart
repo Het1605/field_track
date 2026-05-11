@@ -22,15 +22,18 @@ void main() async {
   // 3. Initialize Background Service
   await BackgroundServiceManager.initializeService();
 
-  // 3. Determine Initial Route (Auto-Login)
+  // 4. Determine Initial Route (Auto-Login)
   final String? token = prefs.getString('auth_token');
   final bool hasActiveJourney = prefs.getString('active_journey_id') != null;
 
-  runApp(FieldTrackApp(
-    initialHome: (token != null || hasActiveJourney)
-        ? const HomeScreen()
-        : const LoginScreen(),
-  ));
+  runApp(
+    FieldTrackApp(
+      initialHome:
+          (token != null || hasActiveJourney)
+              ? const HomeScreen()
+              : const LoginScreen(),
+    ),
+  );
 }
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();

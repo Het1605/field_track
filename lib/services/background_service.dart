@@ -1,10 +1,12 @@
 import 'dart:async';
 import 'dart:ui';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/location_service.dart';
+import 'api_service.dart';
 
 /// Top-level function for IOS Background execution (Must be top-level for AOT)
 @pragma('vm:entry-point')
@@ -15,42 +17,38 @@ Future<bool> onIosBackground(ServiceInstance service) async {
 /// Top-level entry point for the background isolate (Must be top-level for AOT)
 @pragma('vm:entry-point')
 void onStart(ServiceInstance service) async {
-  // Ensure the background isolate is correctly bound to Flutter
   WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await dotenv.load(fileName: ".env");
+  } catch (_) {}
   DartPluginRegistrant.ensureInitialized();
 
-  LocationTrackingService? trackingService;
-
-  try {
-    // API Service now automatically loads URL from SharedPreferences for isolate safety
-    trackingService = LocationTrackingService();
-    debugPrint('[BackgroundService] Successfully initialized Tracking Service.');
-  } catch (e) {
-    debugPrint('[BackgroundService] CRITICAL INITIALIZATION ERROR: $e');
-  }
+  // 1. Initialize for Background
+  final trackingService = LocationTrackingService(isBackground: true);
+  
+  // 2. Wait for API/Database readiness
+  await trackingService.waitForInit();
+  debugPrint('[BackgroundService] Engine ready.');
 
   service.on('stopService').listen((event) {
     service.stopSelf();
   });
 
   // Phase 4 & 5: GPS Tracking + DB Save + API Sync
-  Timer.periodic(const Duration(minutes: 3), (timer) async {
+  Timer.periodic(const Duration(minutes: 1), (timer) async {
+    debugPrint('[BackgroundService] Heartbeat: Service is alive.');
     try {
-      // 1. Safety check for initialization
-      if (trackingService == null) {
-        debugPrint('[BackgroundService] Sync skipped: Service not ready.');
-        return;
-      }
-
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
 
       final String? journeyId = prefs.getString('active_journey_id');
       final int? companyId = prefs.getInt('selected_company_id');
 
-      if (journeyId != null && companyId != null) {
-        debugPrint('[BackgroundService] Triggering scheduled sync for $journeyId');
-        await trackingService!.trackAndSave(journeyId, companyId);
+      if (journeyId != null && journeyId != "null" && companyId != null) {
+        debugPrint('[BackgroundService] Processing tracking for $journeyId');
+        await trackingService.trackAndSave(journeyId, companyId);
+      } else {
+        debugPrint('[BackgroundService] Sleeping: No active journey in memory.');
       }
     } catch (e) {
       debugPrint('[BackgroundService] Timer Error: $e');

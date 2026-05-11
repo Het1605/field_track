@@ -160,6 +160,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           _selectedCompanyId = companyId;
           _startTime = formattedStart;
         });
+
+        // 4. AUTO-START Background Tracking if not running
+        final service = FlutterBackgroundService();
+        if (!(await service.isRunning())) {
+          debugPrint("[Sync] Auto-starting background service for detected journey.");
+          await _resumeTracking();
+        }
       } else {
         // No active journey on backend -> Clear local journey state AND stop background tracking
         if (_activeJourneyId != null) {
