@@ -31,7 +31,7 @@ class LocationTrackingService {
   }
 
   // Tracking interval (3 minutes)
-  static const Duration _interval = Duration(minutes: 1);
+  static const Duration _interval = Duration(minutes: 3);
 
   /// Handles location permission requests (Foreground and Notifications)
   Future<bool> handlePermissions() async {
@@ -133,7 +133,8 @@ class LocationTrackingService {
 
   /// Updates the SharedPreferences with the current number of unsent points
   Future<void> _updateCacheCount() async {
-    final List<Map<String, dynamic>> points = await _dbService.getAllStoredLocations();
+    final List<Map<String, dynamic>> points =
+        await _dbService.getAllStoredLocations();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('cached_points_count', points.length);
   }
@@ -171,9 +172,10 @@ class LocationTrackingService {
         // CHUNKING: Split allPoints into groups of 20
         const int chunkSize = 20;
         for (int i = 0; i < allPoints.length; i += chunkSize) {
-          final int end = (i + chunkSize < allPoints.length)
-              ? i + chunkSize
-              : allPoints.length;
+          final int end =
+              (i + chunkSize < allPoints.length)
+                  ? i + chunkSize
+                  : allPoints.length;
           final List<Map<String, dynamic>> chunk = allPoints.sublist(i, end);
 
           final trackPayload = {
@@ -195,16 +197,22 @@ class LocationTrackingService {
             '[Sync] Sending chunk for $jId (${chunk.length} points, ${i + chunk.length}/${allPoints.length})...',
           );
 
-          final response = await _apiService.post('/location/track', trackPayload);
+          final response = await _apiService.post(
+            '/location/track',
+            trackPayload,
+          );
 
           if (response.success) {
-            final List<int> syncedIds = chunk.map((p) => p['id'] as int).toList();
+            final List<int> syncedIds =
+                chunk.map((p) => p['id'] as int).toList();
             await _dbService.deleteSyncedRecords(syncedIds);
           } else {
-            // IF FAILURE: Stop the loop for this journey immediately. 
+            // IF FAILURE: Stop the loop for this journey immediately.
             // We don't want to keep hitting a dead network.
-            debugPrint('[Sync] Chunk failed: ${response.message}. Stopping loop.');
-            break; 
+            debugPrint(
+              '[Sync] Chunk failed: ${response.message}. Stopping loop.',
+            );
+            break;
           }
         }
       }

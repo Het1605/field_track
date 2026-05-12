@@ -35,7 +35,7 @@ void onStart(ServiceInstance service) async {
   });
 
   // Phase 4 & 5: GPS Tracking + DB Save + API Sync
-  Timer.periodic(const Duration(minutes: 1), (timer) async {
+  Timer.periodic(const Duration(minutes: 3), (timer) async {
     debugPrint('[BackgroundService] Heartbeat: Service is alive.');
     try {
       final prefs = await SharedPreferences.getInstance();
