@@ -257,40 +257,60 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _startJourney() async {
-    if (_selectedCompanyId == null || _isLoading) return;
+    if (_selectedCompanyId == null) return;
 
     setState(() => _isLoading = true);
+    
     try {
-      final Position position = await _locationService.getCurrentLocation();
+      debugPrint('[SmartStart] Waiting for High Accuracy GPS Lock...');
+      Position? bestPosition;
+      
+      // Attempt to get a high-accuracy lock (max 5 retries, 3s apart = ~15s)
+      for (int i = 0; i < 5; i++) {
+        final current = await _locationService.getCurrentLocation();
+        debugPrint('[SmartStart] Attempt ${i + 1}: Accuracy = ${current.accuracy.toStringAsFixed(1)}m');
+        
+        if (bestPosition == null || current.accuracy < bestPosition.accuracy) {
+          bestPosition = current;
+        }
+
+        // If accuracy is good enough (< 35 meters), we start immediately
+        if (current.accuracy <= 35) {
+          debugPrint('[SmartStart] High accuracy achieved! Starting journey.');
+          break;
+        }
+        
+        // Wait 3 seconds before next attempt if not accurate enough
+        if (i < 4) await Future.delayed(const Duration(seconds: 3));
+      }
+
+      final finalPos = bestPosition!;
+
       final response = await _apiService.post('/location/start', {
         'company_id': _selectedCompanyId,
-        'start_lat': position.latitude,
-        'start_lng': position.longitude,
+        'start_lat': finalPos.latitude,
+        'start_lng': finalPos.longitude,
       });
 
-      if (response.success && response.data != null) {
-        final String journeyId = response.data['id'].toString();
-        final String startTime = response.data['start_time'];
-
+      if (response.success) {
+        final journeyId = response.data['id'].toString();
+        final startTime = response.data['start_time'];
+        
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('active_journey_id', journeyId);
-        await prefs.setString('journey_start_time', _formatTime(startTime));
+        await prefs.setString('active_journey_start_time', startTime);
 
         setState(() {
           _activeJourneyId = journeyId;
           _startTime = _formatTime(startTime);
         });
 
-        await FlutterBackgroundService().startService();
-        _locationService.startTracking(
-          journeyId: journeyId,
-          companyId: _selectedCompanyId!,
-        );
+        _locationService.startTracking(journeyId: journeyId, companyId: _selectedCompanyId!);
       }
     } catch (e) {
-      debugPrint("Start Error: $e");
+      debugPrint('[SmartStart] Error: $e');
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
