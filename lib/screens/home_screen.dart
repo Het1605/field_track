@@ -132,19 +132,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     final prefs = await SharedPreferences.getInstance();
     _selectedCompanyId = prefs.getInt('selected_company_id');
 
-    // 3. Fetch User Profile
-    final userDataStr = prefs.getString('user_data');
-    if (userDataStr != null) {
-      _userName = "Employee"; // Could parse from JSON if needed
-    }
-
-    // 4. Fetch/Sync Companies
+    // 3. Fetch/Sync Companies
     await _fetchUserCompaniesAndValidate();
 
-    // 5. Sync Active Journey
+    // 4. Sync Active Journey
     await _syncActiveJourney();
 
-    // 6. AUTO-START Logic (Only if we have a selection)
+    // 5. AUTO-START Logic (Only if we have a selection)
     if (!isTracking && _selectedCompanyId != null && !_isLoading) {
       debugPrint("[AutoStart] Initiating tracking...");
       _startJourney();
@@ -152,7 +146,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     setState(() => _isInitializing = false);
 
-    // 7. Cache Monitor
+    // 6. Cache Monitor
     Timer.periodic(const Duration(seconds: 5), (timer) async {
       if (!mounted) {
         timer.cancel();
@@ -400,13 +394,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       flexibleSpace: FlexibleSpaceBar(
         centerTitle: false,
         titlePadding: const EdgeInsets.only(left: 20, bottom: 16),
-        title: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Field Track', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18, color: Colors.white)),
-            Text('Hello, $_userName', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.normal)),
-          ],
+        title: const Text(
+          'Field Track',
+          style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18, color: Colors.white),
         ),
         background: Container(
           decoration: BoxDecoration(

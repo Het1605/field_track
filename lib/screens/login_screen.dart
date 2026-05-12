@@ -126,16 +126,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     letterSpacing: -0.5,
                   ),
                 ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Employee Management System',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Color(0xFF64748B),
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
                 const SizedBox(height: 40),
 
                 // Login Form Container
@@ -170,7 +160,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
                         // Email Field
                         _buildInputField(
-                          label: 'Email Address',
+                          label: 'Email',
                           hint: 'name@company.com',
                           controller: _emailController,
                           icon: Icons.mail_outline,
@@ -240,10 +230,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 ),
 
                 const SizedBox(height: 32),
-                const Text(
-                  '© 2026 Field Track EMS. All rights reserved.',
-                  style: TextStyle(fontSize: 12, color: Color(0xFF94A3B8)),
-                ),
               ],
             ),
           ),
