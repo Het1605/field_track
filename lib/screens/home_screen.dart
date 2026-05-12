@@ -30,6 +30,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   String? _startTime;
   int _heartbeatCount = 0;
   String _userName = "Employee";
+  String _gpsQuality = "Waiting...";
+  Color _gpsColor = Colors.grey;
+  StreamSubscription<Position>? _positionStream;
 
   List<dynamic> _companies = [];
   int? _selectedCompanyId;
@@ -40,18 +43,63 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     _initializeData();
     _startSyncTimer();
+    _startGpsListener();
+  }
+
+  /// Listens to real-time GPS accuracy to update the Quality indicator
+  void _startGpsListener() {
+    _positionStream?.cancel();
+    _positionStream = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 0, // We want quality updates even if stationary
+      ),
+    ).listen((Position position) {
+      if (!mounted) return;
+      _updateGpsQuality(position.accuracy);
+    }, onError: (e) {
+      debugPrint("GPS Listener Error: $e");
+      if (mounted) {
+        setState(() {
+          _gpsQuality = "Offline";
+          _gpsColor = Colors.red;
+        });
+      }
+    });
+  }
+
+  void _updateGpsQuality(double accuracy) {
+    setState(() {
+      if (accuracy <= 12) {
+        _gpsQuality = "Excellent";
+        _gpsColor = Colors.green;
+      } else if (accuracy <= 50) {
+        _gpsQuality = "Good";
+        _gpsColor = Colors.blue;
+      } else if (accuracy <= 100) {
+        _gpsQuality = "Fair";
+        _gpsColor = Colors.orange;
+      } else {
+        _gpsQuality = "Poor";
+        _gpsColor = Colors.redAccent;
+      }
+    });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _syncActiveJourney();
+      _startGpsListener(); // Restart listener when app returns to foreground
+    } else if (state == AppLifecycleState.paused) {
+      _positionStream?.cancel(); // Save battery when app is in background
     }
   }
 
   @override
   void dispose() {
     _syncTimer?.cancel();
+    _positionStream?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -435,7 +483,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       children: [
         _buildStatCard('Start Time', _startTime ?? '--:--', Icons.watch_later_outlined, Colors.indigo),
         const SizedBox(width: 16),
-        _buildStatCard('GPS Quality', 'Excellent', Icons.gps_fixed_rounded, Colors.green),
+        _buildStatCard('GPS Quality', _gpsQuality, Icons.gps_fixed_rounded, _gpsColor),
       ],
     );
   }
