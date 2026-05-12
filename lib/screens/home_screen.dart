@@ -1,17 +1,13 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
-import 'package:geolocator/geolocator.dart'; // Added for Position type
-import 'package:permission_handler/permission_handler.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/location_service.dart';
-import 'change_password_screen.dart'; // New Import
 import 'login_screen.dart';
-import 'profile_screen.dart';
+import 'company_selection_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -29,10 +25,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool _isLoading = false;
   bool _isInitializing = true;
   bool _isSessionValid = true;
+  bool _isPermissionsGranted = false;
   String? _activeJourneyId;
   String? _startTime;
+  int _heartbeatCount = 0;
+  String _userName = "Employee";
 
-  // Multi-company data
   List<dynamic> _companies = [];
   int? _selectedCompanyId;
 
@@ -47,7 +45,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      // Sync journey status whenever user returns to the app
       _syncActiveJourney();
     }
   }
@@ -56,11 +53,9 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   void dispose() {
     _syncTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
-    _locationService.stopTracking();
     super.dispose();
   }
 
-  /// Periodically checks if the journey is still active on the server
   void _startSyncTimer() {
     _syncTimer?.cancel();
     _syncTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
@@ -70,24 +65,46 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  int _heartbeatCount = 0;
+  bool get isTracking => _activeJourneyId != null;
 
-  /// Initial data load: Companies and Active Journey
   Future<void> _initializeData() async {
     setState(() {
       _isInitializing = true;
       _isSessionValid = true;
     });
 
-    // 1. Fetch companies
-    await _fetchUserCompanies();
+    // 1. Permissions
+    _isPermissionsGranted = await _locationService.handlePermissions();
+    if (!_isPermissionsGranted) {
+      setState(() => _isInitializing = false);
+      return;
+    }
 
-    // 2. Check for active journey (Local + Backend Sync)
+    // 2. Load Selected Company from Prefs
+    final prefs = await SharedPreferences.getInstance();
+    _selectedCompanyId = prefs.getInt('selected_company_id');
+
+    // 3. Fetch User Profile
+    final userDataStr = prefs.getString('user_data');
+    if (userDataStr != null) {
+      _userName = "Employee"; // Could parse from JSON if needed
+    }
+
+    // 4. Fetch/Sync Companies
+    await _fetchUserCompaniesAndValidate();
+
+    // 5. Sync Active Journey
     await _syncActiveJourney();
+
+    // 6. AUTO-START Logic (Only if we have a selection)
+    if (!isTracking && _selectedCompanyId != null && !_isLoading) {
+      debugPrint("[AutoStart] Initiating tracking...");
+      _startJourney();
+    }
 
     setState(() => _isInitializing = false);
 
-    // 3. Start Cache Monitor (Show number of unsent points)
+    // 7. Cache Monitor
     Timer.periodic(const Duration(seconds: 5), (timer) async {
       if (!mounted) {
         timer.cancel();
@@ -101,229 +118,108 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     });
   }
 
-  /// Fetch companies assigned to the current user
-  Future<void> _fetchUserCompanies() async {
+  Future<void> _fetchUserCompaniesAndValidate() async {
     try {
       final response = await _apiService.get('/companies/my');
       if (response.success && response.data is List) {
-        setState(() {
-          _companies = response.data;
-          _restoreOrAutoSelectCompany();
-        });
-      } else if (response.message.contains('Session expired')) {
-        setState(() => _isSessionValid = false);
+        _companies = response.data as List;
+        
+        if (_companies.isEmpty) {
+          _showNoCompanyLogoutPopup();
+          return;
+        }
+
+        // If user has multiple companies but hasn't picked one, send back to selection
+        if (_selectedCompanyId == null && _companies.length > 1) {
+          if (mounted) {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (_) => CompanySelectionScreen(companies: _companies)),
+            );
+          }
+        } else if (_selectedCompanyId == null && _companies.length == 1) {
+          // Auto-select the only one
+          _selectedCompanyId = _companies.first['id'];
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setInt('selected_company_id', _selectedCompanyId!);
+        }
       }
     } catch (e) {
-      debugPrint("Error fetching companies: $e");
+      debugPrint("Company Fetch Error: $e");
     }
   }
 
-  Future<void> _restoreOrAutoSelectCompany() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedCompanyId = prefs.getInt('selected_company_id');
-
-    if (_companies.length == 1) {
-      _selectedCompanyId = _companies.first['id'];
-    } else if (savedCompanyId != null &&
-        _companies.any((c) => c['id'] == savedCompanyId)) {
-      _selectedCompanyId = savedCompanyId;
-    } else if (_companies.isNotEmpty) {
-      _selectedCompanyId = _companies.first['id'];
-    }
+  void _showNoCompanyLogoutPopup() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Access Denied'),
+        content: const Text('No company assigned. Please contact your administrator.'),
+        actions: [
+          ElevatedButton(onPressed: () => _performLogout(force: true), child: const Text('Back to Login')),
+        ],
+      ),
+    );
   }
 
-  /// Syncs the active journey state from backend and local storage
   Future<void> _syncActiveJourney() async {
     try {
       final response = await _apiService.get('/location/active-journey');
       final prefs = await SharedPreferences.getInstance();
 
-      debugPrint("[Sync] Backend Response Data: ${response.data}");
-
       if (response.success && response.data != null) {
-        // Backend says there is an active journey
         final dynamic journeyData = response.data;
         final String journeyId = journeyData['id'].toString();
         final int? companyId = journeyData['company_id'];
         final String? startTime = journeyData['start_time'];
 
-        debugPrint(
-          "[Sync] Active Journey Found: $journeyId for Company: $companyId",
-        );
+        if (companyId != null) {
+          await prefs.setString('active_journey_id', journeyId);
+          await prefs.setInt('selected_company_id', companyId);
 
-        if (companyId == null) {
-          debugPrint("[Sync] Error: company_id is null");
-          return;
-        }
+          setState(() {
+            _activeJourneyId = journeyId;
+            _selectedCompanyId = companyId;
+            _startTime = _formatTime(startTime);
+          });
 
-        // Format start time for UI
-        String formattedStart = "Unknown";
-        if (startTime != null) {
-          try {
-            final dt = DateTime.parse(startTime).toLocal();
-            formattedStart =
-                "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
-          } catch (_) {}
-        }
-
-        // Sync local storage
-        await prefs.setString('active_journey_id', journeyId);
-        await prefs.setInt('selected_company_id', companyId);
-
-        setState(() {
-          _activeJourneyId = journeyId;
-          _selectedCompanyId = companyId;
-          _startTime = formattedStart;
-        });
-
-        // 4. AUTO-START Background Tracking if not running
-        final service = FlutterBackgroundService();
-        if (!(await service.isRunning())) {
-          debugPrint("[Sync] Auto-starting background service for detected journey.");
-          await _resumeTracking();
-        }
-      } else if (response.success && response.data == null) {
-        // ONLY clear local state if server explicitly says "No Active Journey" (success=true, data=null)
-        if (_activeJourneyId != null) {
-          debugPrint("[Sync] Journey ended on server. Stopping local tracking.");
-          _locationService.stopTracking();
-          try {
-            final service = FlutterBackgroundService();
-            if (await service.isRunning()) {
-              service.invoke("stopService");
-            }
-          } catch (e) {
-            debugPrint("Error stopping background service: $e");
+          final service = FlutterBackgroundService();
+          if (!(await service.isRunning())) {
+            _resumeTracking();
           }
         }
-
+      } else if (response.success && response.data == null) {
+        if (isTracking) {
+          debugPrint("[Sync] Journey terminated remotely. Logging out.");
+          _performLogout(force: true);
+        }
         await prefs.remove('active_journey_id');
-        await prefs.remove('journey_start_time');
         setState(() {
           _activeJourneyId = null;
           _startTime = null;
         });
-      } else {
-        // Network Error or Server Error: DO NOTHING.
-        // We keep the current state (Tracking) until we get a successful answer.
-        debugPrint("[Sync] Network error or server busy. Keeping current journey state.");
       }
     } catch (e) {
-      debugPrint("Error syncing active journey: $e");
+      debugPrint("Sync Error: $e");
     }
   }
 
-  /// Shows a dialog to the user when a journey is found on app start
-  void _showResumeJourneyDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder:
-          (context) => AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            title: const Row(
-              children: [
-                Icon(Icons.history_rounded, color: Colors.blue),
-                SizedBox(width: 12),
-                Text('Active Journey Found'),
-              ],
-            ),
-            content: Text(
-              'A journey started at $_startTime was found in progress. Would you like to resume tracking or end it now?',
-              softWrap: true,
-            ),
-            actions: [
-              TextButton(
-                onPressed: () async {
-                  Navigator.pop(context);
-                  await _endJourney();
-                },
-                child: const Text(
-                  'End Journey',
-                  style: TextStyle(color: Colors.red),
-                ),
-              ),
-              ElevatedButton(
-                onPressed: () async {
-                  Navigator.pop(context);
-                  _resumeTracking();
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green.shade600,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                ),
-                child: const Text('Resume Journey'),
-              ),
-            ],
-          ),
-    );
-  }
-
-  /// Resumes the tracking logic
-  Future<void> _resumeTracking() async {
-    if (_activeJourneyId == null || _selectedCompanyId == null) return;
-
-    // Restart GPS Engine
-    _locationService.startTracking(
-      journeyId: _activeJourneyId!,
-      companyId: _selectedCompanyId!,
-    );
-
-    // Restart Background Service
+  String _formatTime(String? iso) {
+    if (iso == null) return "N/A";
     try {
-      await FlutterBackgroundService().startService();
-    } catch (e) {
-      debugPrint("Service start failed: $e");
-    }
-
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Tracking resumed successfully'),
-          backgroundColor: Colors.green,
-        ),
-      );
+      final dt = DateTime.parse(iso).toLocal();
+      return "${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}";
+    } catch (_) {
+      return "N/A";
     }
   }
 
-  Future<void> _onCompanyChanged(int? newId) async {
-    if (newId == null || isTracking) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('selected_company_id', newId);
-    setState(() => _selectedCompanyId = newId);
-  }
-
-  bool get isTracking => _activeJourneyId != null;
-
-  /// Starts a new journey and launches the Background Foreground Service
   Future<void> _startJourney() async {
-    if (_selectedCompanyId == null) return;
-
-    // 1. Check Permissions First
-    final bool hasPermission = await _locationService.handlePermissions();
-    if (!hasPermission) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Location permission is required to track journeys.'),
-            backgroundColor: Colors.orange,
-          ),
-        );
-      }
-      return;
-    }
+    if (_selectedCompanyId == null || _isLoading) return;
 
     setState(() => _isLoading = true);
     try {
-      // 2. Fetch current location for Start API
       final Position position = await _locationService.getCurrentLocation();
-
-      // 3. Call Start API
       final response = await _apiService.post('/location/start', {
         'company_id': _selectedCompanyId,
         'start_lat': position.latitude,
@@ -331,279 +227,78 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
 
       if (response.success && response.data != null) {
-        final dynamic journeyData = response.data;
-        final String journeyId = journeyData['id'].toString();
+        final String journeyId = response.data['id'].toString();
+        final String startTime = response.data['start_time'];
 
         final prefs = await SharedPreferences.getInstance();
-        final now = DateTime.now();
-        final startTimeStr =
-            "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
-
         await prefs.setString('active_journey_id', journeyId);
-        await prefs.setString('journey_start_time', startTimeStr);
-        await prefs.setInt('selected_company_id', _selectedCompanyId!);
+        await prefs.setString('journey_start_time', _formatTime(startTime));
 
-        // 3. Start Real-time GPS Tracking Engine
+        setState(() {
+          _activeJourneyId = journeyId;
+          _startTime = _formatTime(startTime);
+        });
+
+        await FlutterBackgroundService().startService();
         _locationService.startTracking(
           journeyId: journeyId,
           companyId: _selectedCompanyId!,
         );
-
-        // 4. Request Notification Permission (Critical for Android 13+ foreground service)
-        if (await Permission.notification.isDenied) {
-          await Permission.notification.request();
-        }
-
-        // 5. Start Background Foreground Service (Phase 1)
-        // Increased delay to ensure the OS stabilizes after permission popups
-        await Future.delayed(const Duration(milliseconds: 800));
-
-        try {
-          await FlutterBackgroundService().startService();
-        } catch (e) {
-          debugPrint("Service start failed: $e");
-        }
-
-        setState(() {
-          _activeJourneyId = journeyId;
-          _startTime = startTimeStr;
-        });
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Journey started with background tracking'),
-              backgroundColor: Colors.green,
-            ),
-          );
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(response.message),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to start journey'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+      debugPrint("Start Error: $e");
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      setState(() => _isLoading = false);
     }
   }
 
-  /// Ends the journey and stops the background service
   Future<void> _endJourney() async {
-    final prefs = await SharedPreferences.getInstance();
-
-    // 1. Double-check IDs (Check memory first, then fallback to SharedPreferences)
-    String? jId = _activeJourneyId;
-    if (jId == null || jId == "null") {
-      jId = prefs.getString('active_journey_id');
-    }
-
-    int? cId = _selectedCompanyId;
-    if (cId == null) {
-      cId = prefs.getInt('selected_company_id');
-    }
-
-    // If still null, the session is truly lost. Force reset UI.
-    if (jId == null || jId == "null" || cId == null) {
-      debugPrint(
-        "[End] Critical Error: Journey ID or Company ID missing. Force resetting state.",
-      );
-      await _forceResetLocalState();
-      return;
-    }
-
-    setState(() => _isLoading = true);
+    if (_activeJourneyId == null || _selectedCompanyId == null) return;
     try {
-      // 1. Fetch current location for End API (With safety fallback)
-      double lat = 0.0;
-      double lng = 0.0;
-      try {
-        final Position position = await _locationService.getCurrentLocation();
-        lat = position.latitude;
-        lng = position.longitude;
-      } catch (e) {
-        debugPrint("Could not get final location for end journey: $e");
-        // We continue with 0.0 so the user isn't stuck forever
-      }
-
-      // 2. Stop GPS Tracking Engine and Background Service (Phase 1)
-      _locationService.stopTracking();
-      FlutterBackgroundService().invoke("stopService");
-
-      // 3. Call End API
-      final response = await _apiService.post('/location/end', {
-        'journey_id': jId,
-        'company_id': cId,
-        'end_lat': lat,
-        'end_lng': lng,
+      final Position position = await _locationService.getCurrentLocation();
+      await _apiService.post('/location/end', {
+        'journey_id': _activeJourneyId,
+        'company_id': _selectedCompanyId,
+        'end_lat': position.latitude,
+        'end_lng': position.longitude,
       });
-
-      if (response.success ||
-          response.message.contains("404") ||
-          response.message.contains("not found")) {
-        // If success OR if the journey was already ended on the server (404)
-        await _forceResetLocalState();
-
-        if (mounted && response.success) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Journey and tracking stopped'),
-              backgroundColor: Colors.blue,
-            ),
-          );
-        }
-      } else if (response.message.toLowerCase().contains(
-            "stopped by administrator",
-          ) ||
-          response.message.contains("JOURNEY_STOPPED_BY_ADMIN")) {
-        // ADMIN STOP CASE: Force reset UI immediately
-        await _forceResetLocalState();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'This journey was already ended by the administrator.',
-              ),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(response.message),
-              backgroundColor: Colors.red,
-            ),
-          );
-        }
-      }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Failed to end journey: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
+      debugPrint("End Error: $e");
     }
   }
 
-  /// Force clears all local journey tracking data to fix stuck UI
-  Future<void> _forceResetLocalState() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('active_journey_id');
-    await prefs.remove('journey_start_time');
-
-    // Stop background tasks
-    _locationService.stopTracking();
-    FlutterBackgroundService().invoke("stopService");
-
-    setState(() {
-      _activeJourneyId = null;
-      _startTime = null;
-    });
-  }
-
-  void _handleLogout() async {
-    if (isTracking) {
-      _showActiveJourneyLogoutDialog();
-    } else {
-      _performLogout();
-    }
-  }
-
-  /// Shows a professional dialog warning the user about an active journey
-  void _showActiveJourneyLogoutDialog() {
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-            ),
-            title: const Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.warning_amber_rounded, color: Colors.orange),
-                SizedBox(width: 8),
-                Expanded(child: Text('Active Journey Running', softWrap: true)),
-              ],
-            ),
-            content: const SingleChildScrollView(
-              child: Text(
-                'You must end your journey before logging out to ensure your records are saved correctly.',
-                softWrap: true,
-              ),
-            ),
-            actionsPadding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-            actionsAlignment: MainAxisAlignment.end,
-            actionsOverflowButtonSpacing: 8,
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text(
-                  'Cancel',
-                  style: TextStyle(color: Colors.grey),
-                ),
-              ),
-              ElevatedButton(
-                onPressed: () async {
-                  Navigator.pop(context); // Close dialog
-                  await _endJourney(); // End journey first
-                  _performLogout(); // Then logout
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.red.shade600,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 12,
-                  ),
-                ),
-                child: const Text(
-                  'End Journey & Logout',
-                  textAlign: TextAlign.center,
-                  softWrap: true,
-                ),
-              ),
-            ],
-          ),
+  void _resumeTracking() async {
+    if (_activeJourneyId == null || _selectedCompanyId == null) return;
+    await FlutterBackgroundService().startService();
+    _locationService.startTracking(
+      journeyId: _activeJourneyId!,
+      companyId: _selectedCompanyId!,
     );
   }
 
-  /// Core logout logic shared between direct and intercepted logout
-  void _performLogout() async {
-    _locationService.stopTracking(); // Stop tracking immediately
-    FlutterBackgroundService().invoke(
-      "stopService",
-    ); // Stop background service (Phase 1)
+  void _performLogout({bool force = false}) async {
+    if (!force) {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Logout'),
+          content: const Text('Logging out will end your current tracking session. Continue?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Logout')),
+          ],
+        ),
+      );
+      if (confirm != true) return;
+    }
 
-    // Clear journey session data
+    setState(() => _isLoading = true);
+    await _endJourney();
+    _locationService.stopTracking();
+    FlutterBackgroundService().invoke("stopService");
+    
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('active_journey_id');
-    await prefs.remove('journey_start_time');
-
-    // Clear Auth token via service
+    await prefs.clear();
     await _authService.logout();
 
     if (mounted) {
@@ -620,399 +315,227 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final size = MediaQuery.of(context).size;
-    final isLargeScreen = size.width > 600;
-
     return Scaffold(
-      backgroundColor: const Color(0xFFF1F5F9),
-      appBar: AppBar(
-        title: const Text(
-          'Journey Control',
-          style: TextStyle(fontWeight: FontWeight.bold),
-        ),
-        centerTitle: true,
-        actions: [
-          if (_heartbeatCount > 0)
-            Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                margin: const EdgeInsets.only(right: 8),
-                decoration: BoxDecoration(
-                  color: Colors.orange.withAlpha(20),
-                  borderRadius: BorderRadius.circular(15),
-                  border: Border.all(color: Colors.orange.withAlpha(40)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.cloud_off, color: Colors.orange, size: 14),
-                    const SizedBox(width: 4),
-                    Text(
-                      '$_heartbeatCount',
-                      style: const TextStyle(
-                        color: Colors.orange,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          PopupMenuButton<String>(
-            onSelected: (value) {
-              if (value == 'my_profile') {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
-                );
-              } else if (value == 'change_password') {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => const ChangePasswordScreen(),
-                  ),
-                );
-              } else if (value == 'logout') {
-                _handleLogout();
-              }
-            },
-            offset: const Offset(0, 50),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            itemBuilder:
-                (context) => [
-                  const PopupMenuItem(
-                    value: 'my_profile',
-                    child: Row(
-                      children: [
-                        Icon(Icons.person_outline_rounded, color: Colors.blue),
-                        SizedBox(width: 12),
-                        Text('My Profile'),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuItem(
-                    value: 'change_password',
-                    child: Row(
-                      children: [
-                        Icon(Icons.lock_reset_rounded, color: Colors.blueGrey),
-                        SizedBox(width: 12),
-                        Text('Change Password'),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuDivider(),
-                  const PopupMenuItem(
-                    value: 'logout',
-                    child: Row(
-                      children: [
-                        Icon(Icons.logout_rounded, color: Colors.redAccent),
-                        SizedBox(width: 12),
-                        Text(
-                          'Logout',
-                          style: TextStyle(color: Colors.redAccent),
-                        ),
-                      ],
-                    ),
-                  ),
+      backgroundColor: const Color(0xFFF8FAFC),
+      body: CustomScrollView(
+        slivers: [
+          _buildPremiumSliverAppBar(),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+              child: Column(
+                children: [
+                  if (!_isSessionValid) _buildSessionWarning(),
+                  _buildTrackingStatusCard(),
+                  const SizedBox(height: 24),
+                  _buildStatsGrid(),
+                  const SizedBox(height: 32),
+                  _buildCompanyBadge(),
+                  const SizedBox(height: 48),
+                  _buildSyncFooter(),
                 ],
-            child: const Padding(
-              padding: EdgeInsets.only(right: 16.0),
-              child: CircleAvatar(
-                radius: 18,
-                backgroundColor: Color(0xFFE2E8F0),
-                child: Icon(
-                  Icons.person_outline_rounded,
-                  color: Color(0xFF475569),
-                  size: 20,
-                ),
               ),
             ),
           ),
         ],
       ),
-      body: SafeArea(
-        child: Column(
-          children: [
-            if (!_isSessionValid) _buildSessionWarningBanner(),
-            Expanded(
-              child:
-                  _companies.isEmpty
-                      ? _buildNoCompanyState()
-                      : _buildTrackingContent(size, isLargeScreen),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
-  Widget _buildNoCompanyState() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+  Widget _buildPremiumSliverAppBar() {
+    return SliverAppBar(
+      expandedHeight: 140,
+      pinned: true,
+      elevation: 0,
+      backgroundColor: Colors.indigo.shade900,
+      leading: const SizedBox.shrink(), // Remove back arrow
+      flexibleSpace: FlexibleSpaceBar(
+        centerTitle: false,
+        titlePadding: const EdgeInsets.only(left: 20, bottom: 16),
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: Colors.orange.withAlpha(20),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.domain_disabled,
-                size: 64,
-                color: Colors.orange,
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'No Company Assigned',
-              style: TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF1E293B),
-              ),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'You are not assigned to any company yet. Please contact your administrator to get started.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 15,
-                color: Color(0xFF64748B),
-                height: 1.5,
-              ),
-            ),
-            const SizedBox(height: 32),
-            ElevatedButton.icon(
-              onPressed: _isLoading ? null : _initializeData,
-              icon:
-                  _isLoading
-                      ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                      : const Icon(Icons.refresh_rounded),
-              label: const Text('Refresh Status'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF2563EB),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-            ),
+            Text('Field Track', style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18, color: Colors.white)),
+            Text('Hello, $_userName', style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.normal)),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildTrackingContent(Size size, bool isLargeScreen) {
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-      child: Padding(
-        padding: EdgeInsets.symmetric(
-          horizontal: isLargeScreen ? size.width * 0.2 : 24.0,
-          vertical: size.height * 0.05,
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            if (_companies.length > 1) ...[
-              _buildCompanySelector(),
-              SizedBox(height: size.height * 0.05),
+        background: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Colors.indigo.shade900, Colors.indigo.shade700],
+              begin: Alignment.topLeft, end: Alignment.bottomRight,
+            ),
+          ),
+          child: Stack(
+            children: [
+              Positioned(
+                top: -30, right: -30,
+                child: Icon(Icons.gps_fixed, size: 180, color: Colors.white.withAlpha(10)),
+              ),
             ],
-            _buildStatusVisualizer(size),
-            SizedBox(height: size.height * 0.05),
-            Text(
-              isTracking ? 'Tracking in Progress' : 'Not Tracking',
-              style: TextStyle(
-                fontSize: isLargeScreen ? 32 : 26,
-                fontWeight: FontWeight.w800,
-                color:
-                    isTracking
-                        ? Colors.green.shade700
-                        : Colors.blueGrey.shade700,
-                letterSpacing: -0.5,
-              ),
-            ),
-            const SizedBox(height: 12),
-            if (isTracking && _startTime != null) _buildStartTimeBadge(),
-            SizedBox(height: size.height * 0.1),
-            _buildMainActionButton(),
-            const SizedBox(height: 20),
-            const Text(
-              'GPS tracking active during journey.',
-              style: TextStyle(
-                color: Colors.blueGrey,
-                fontSize: 12,
-                fontStyle: FontStyle.italic,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.logout_rounded, color: Colors.white),
+          onPressed: _performLogout,
+        ),
+        const SizedBox(width: 8),
+      ],
     );
   }
 
-  Widget _buildCompanySelector() {
+  Widget _buildTrackingStatusCard() {
+    final color = isTracking ? const Color(0xFF10B981) : const Color(0xFF64748B);
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(5),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [BoxShadow(color: Colors.black.withAlpha(5), blurRadius: 20, offset: const Offset(0, 10))],
       ),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButton<int>(
-          value: _selectedCompanyId,
-          isExpanded: true,
-          icon: const Icon(Icons.business_rounded, color: Color(0xFF2563EB)),
-          hint: const Text("Select Company"),
-          onChanged: isTracking ? null : _onCompanyChanged,
-          items:
-              _companies.map((company) {
-                return DropdownMenuItem<int>(
-                  value: company['id'],
-                  child: Text(
-                    company['name'],
-                    style: const TextStyle(
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF1E293B),
-                    ),
-                  ),
-                );
-              }).toList(),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStatusVisualizer(Size size) {
-    final double diameter = size.width * (size.width > 600 ? 0.25 : 0.45);
-
-    return Container(
-      width: diameter,
-      height: diameter,
-      padding: EdgeInsets.all(diameter * 0.15),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        shape: BoxShape.circle,
-        boxShadow: [
-          BoxShadow(
-            color: (isTracking ? Colors.green : Colors.blueGrey).withAlpha(30),
-            blurRadius: 40,
-            spreadRadius: 10,
-          ),
-        ],
-      ),
-      child: Icon(
-        isTracking ? Icons.location_on : Icons.location_off,
-        size: diameter * 0.5,
-        color: isTracking ? Colors.green : Colors.blueGrey.shade300,
-      ),
-    );
-  }
-
-  Widget _buildStartTimeBadge() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.green.withAlpha(20),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        'Started at $_startTime',
-        style: TextStyle(
-          color: Colors.green.shade800,
-          fontWeight: FontWeight.w600,
-          fontSize: 14,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildMainActionButton() {
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(maxWidth: 400),
-      child: ElevatedButton(
-        onPressed:
-            _isLoading ? null : (isTracking ? _endJourney : _startJourney),
-        style: ElevatedButton.styleFrom(
-          backgroundColor:
-              isTracking ? Colors.red.shade600 : Colors.green.shade600,
-          foregroundColor: Colors.white,
-          padding: const EdgeInsets.symmetric(vertical: 20),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          elevation: 4,
-        ),
-        child:
-            _isLoading
-                ? const SizedBox(
-                  height: 24,
-                  width: 24,
-                  child: CircularProgressIndicator(
-                    color: Colors.white,
-                    strokeWidth: 3,
-                  ),
-                )
-                : Text(
-                  isTracking ? 'End Journey' : 'Start Journey',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-      ),
-    );
-  }
-
-  Widget _buildSessionWarningBanner() {
-    return Container(
-      width: double.infinity,
-      color: Colors.orange.shade100,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: [
-          const Icon(Icons.warning_amber_rounded, color: Colors.orange),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Text(
-              'Session expired. Please login to sync data.',
-              style: TextStyle(
-                color: Colors.orange,
-                fontWeight: FontWeight.bold,
-                fontSize: 13,
-              ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+                    const SizedBox(width: 8),
+                    Text(isTracking ? 'TRACKING ACTIVE' : 'SYSTEM IDLE', style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 11, letterSpacing: 1.1)),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                const Text('Duty Status', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                const SizedBox(height: 4),
+                Text(isTracking ? 'Your location is being synced live.' : 'Ready for next assignment.', style: const TextStyle(color: Colors.grey, fontSize: 14)),
+              ],
             ),
           ),
-          TextButton(
-            onPressed: () {
-              Navigator.of(
-                context,
-              ).push(MaterialPageRoute(builder: (_) => const LoginScreen()));
-            },
-            child: const Text('Login'),
-          ),
+          _buildRadarCircle(color),
         ],
       ),
     );
   }
+
+  Widget _buildRadarCircle(Color color) {
+    return Container(
+      width: 64, height: 64,
+      decoration: BoxDecoration(color: color.withAlpha(15), shape: BoxShape.circle),
+      child: isTracking ? const RadarPulse() : Icon(Icons.location_disabled_rounded, color: color, size: 28),
+    );
+  }
+
+  Widget _buildStatsGrid() {
+    return Row(
+      children: [
+        _buildStatCard('Start Time', _startTime ?? '--:--', Icons.watch_later_outlined, Colors.indigo),
+        const SizedBox(width: 16),
+        _buildStatCard('GPS Quality', 'Excellent', Icons.gps_fixed_rounded, Colors.green),
+      ],
+    );
+  }
+
+  Widget _buildStatCard(String label, String value, IconData icon, Color color) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24), border: Border.all(color: const Color(0xFFF1F5F9))),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: color.withAlpha(15), borderRadius: BorderRadius.circular(10)), child: Icon(icon, color: color, size: 18)),
+            const SizedBox(height: 16),
+            Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+            const SizedBox(height: 2),
+            Text(label, style: const TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.w500)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCompanyBadge() {
+    String name = "Loading...";
+    if (_companies.isNotEmpty && _selectedCompanyId != null) {
+      final comp = _companies.firstWhere((c) => c['id'] == _selectedCompanyId, orElse: () => null);
+      if (comp != null) name = comp['name'];
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      decoration: BoxDecoration(color: const Color(0xFFF1F5F9), borderRadius: BorderRadius.circular(16)),
+      child: Row(
+        children: [
+          const Icon(Icons.business_center_rounded, size: 20, color: Color(0xFF64748B)),
+          const SizedBox(width: 12),
+          Expanded(child: Text(name, style: const TextStyle(color: Color(0xFF475569), fontWeight: FontWeight.w600))),
+          const Icon(Icons.verified_user_rounded, color: Colors.indigo, size: 18),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSyncFooter() {
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.cloud_done_rounded, size: 16, color: _heartbeatCount == 0 ? Colors.green : Colors.orange),
+            const SizedBox(width: 8),
+            Text(
+              _heartbeatCount == 0 ? 'Data synchronized' : 'Syncing $_heartbeatCount data points...',
+              style: TextStyle(color: _heartbeatCount == 0 ? Colors.green : Colors.orange, fontWeight: FontWeight.bold, fontSize: 13),
+            ),
+          ],
+        ),
+        if (_isLoading) const Padding(padding: EdgeInsets.only(top: 16), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.indigo))),
+      ],
+    );
+  }
+
+  Widget _buildSessionWarning() => Container(margin: const EdgeInsets.only(bottom: 20), padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(12)), child: const Text("Session Expired. Please login.", style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)));
+}
+
+class RadarPulse extends StatefulWidget {
+  const RadarPulse({super.key});
+  @override
+  State<RadarPulse> createState() => _RadarPulseState();
+}
+
+class _RadarPulseState extends State<RadarPulse> with SingleTickerProviderStateMixin {
+  late AnimationController _c;
+  @override
+  void initState() {
+    super.initState();
+    _c = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat();
+  }
+  @override
+  void dispose() { _c.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (context, child) => CustomPaint(painter: RadarPulsePainter(_c.value), child: const Center(child: Icon(Icons.my_location_rounded, color: Color(0xFF10B981), size: 24))),
+    );
+  }
+}
+
+class RadarPulsePainter extends CustomPainter {
+  final double v;
+  RadarPulsePainter(this.v);
+  @override
+  void paint(Canvas c, Size s) {
+    final p1 = Paint()..color = const Color(0xFF10B981).withOpacity(1.0 - v)..style = PaintingStyle.stroke..strokeWidth = 2;
+    c.drawCircle(Offset(s.width/2, s.height/2), (s.width/2) * v, p1);
+    final p2 = Paint()..color = const Color(0xFF10B981).withOpacity((1.0 - v) * 0.4)..style = PaintingStyle.fill;
+    c.drawCircle(Offset(s.width/2, s.height/2), (s.width/2) * v, p2);
+  }
+  @override
+  bool shouldRepaint(CustomPainter old) => true;
 }

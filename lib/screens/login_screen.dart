@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import 'forgot_password_screen.dart';
 import 'home_screen.dart';
+import 'company_selection_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -17,6 +19,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final AuthService _authService = AuthService();
+  final ApiService _apiService = ApiService();
 
   bool _isLoading = false;
   bool _isObscured = true;
@@ -44,15 +47,35 @@ class _LoginScreenState extends State<LoginScreen> {
       );
 
       if (response.success) {
-        // Hard clear any stale journey data before entering the app
         final prefs = await SharedPreferences.getInstance();
         await prefs.remove('active_journey_id');
         await prefs.remove('journey_start_time');
+        await prefs.remove('selected_company_id');
 
-        if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(builder: (_) => const HomeScreen()),
-          );
+        // Fetch Companies to decide where to go
+        final compResponse = await _apiService.get('/companies/my');
+        if (compResponse.success && compResponse.data is List) {
+          final List companies = compResponse.data;
+          
+          if (mounted) {
+            if (companies.isEmpty) {
+              setState(() => _errorMessage = "No company assigned to this account.");
+              return;
+            } else if (companies.length == 1) {
+              // Only 1 company? Auto-select and go Home
+              await prefs.setInt('selected_company_id', companies.first['id']);
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(builder: (_) => const HomeScreen()),
+              );
+            } else {
+              // Multiple companies? Go to selection screen
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(builder: (_) => CompanySelectionScreen(companies: companies)),
+              );
+            }
+          }
+        } else {
+          setState(() => _errorMessage = "Could not fetch company data.");
         }
       } else {
         setState(() {
